@@ -1941,8 +1941,8 @@ class Model11(PreRTModelBase):
             idx = np.nanargmin(np.where(p_atm < 0.3, xnew, np.nan))
 
             # Set all VMR above the cold trap to the values at the cold trap
-            xnew[:idx] = xnew[idx]
-            xmap[1, :idx] = xmap[1, idx]
+            xnew[idx:] = xnew[idx]
+            xmap[1, idx:] = xmap[1, idx]
 
         # Update atmosphere VMR
         atm.VMR[:, atm_profile_idx] = xnew[:]
