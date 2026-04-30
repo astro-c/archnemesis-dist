@@ -1788,8 +1788,7 @@ class Model11(PreRTModelBase):
     """
         Condensing gas, but no associated cloud. Model requires
         the deep gas abundance and the desired relative humidity above the 
-        condensation level only (VARPARAM(IVAR,1))=1) or at all levels
-        (VARPARAM(IVAR,1))=0)
+        condensation level only or at all levels.
     """
     
     id : int = 11
@@ -1837,13 +1836,13 @@ class Model11(PreRTModelBase):
             #   Index of the atmospheric profile we are altering (or None if the profile type does not have multiples)
             
             deep_vmr : float,
-            #   Deep gas abundance (VMR)
+            #   Deep gas abundance
             
             rh : float,
             #   Relative humidity
             
             icond : int,
-            #   Condensation mode flag, from VARPARAM(IVAR,1) (Fortran)
+            #   Condensation mode flag
             #       icond = 1 : apply RH cap only above condensation level
             #       icond = 0 : apply RH cap at all levels
             
@@ -1868,10 +1867,10 @@ class Model11(PreRTModelBase):
                     Index of the atmospheric profile we are altering (or None if the profile type does not have multiples)
 
                 deep_vmr :: float
-                    Deep VMR (unitless)
+                    Deep gas abundance
 
                 rh :: float
-                    RH multiplier (unitless)
+                    Relative humidity
 
                 icond :: int
                     0 or 1 (see above)
@@ -1886,7 +1885,7 @@ class Model11(PreRTModelBase):
                 xmap(2,npro) :: Matrix of relating funtional derivatives to
                                 elements in state vector
 
-            MODIFICATION HISTORY : Michelle Colantoni (18/03/2026)
+            MODIFICATION HISTORY : Michelle Colantoni (30/04/2026)
         """
 
         if atm_profile_type != AtmosphericProfileType.GAS_VOLUME_MIXING_RATIO:
@@ -1906,7 +1905,6 @@ class Model11(PreRTModelBase):
             _lgr.error(_msg)
             raise ValueError(_msg)
 
-        # Convert P to atm as seems to be in NEMESIS logic
         p_atm = np.array(atm.P, dtype=float) / 101325.0
         T = np.array(atm.T, dtype=float)
 
@@ -1927,6 +1925,7 @@ class Model11(PreRTModelBase):
 
         ifla = 1 if np.any(~below_sat) else 0
         
+        # Determine if RH is to apply at all levels (icond = 0) or only above the condensation level (icond = 1)
         if icond == 0:
             cap = p1 > ph
 
