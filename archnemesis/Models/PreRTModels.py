@@ -4062,6 +4062,368 @@ class Model51(PreRTModelBase):
         ix = ix + forward_model.Variables.NXVAR[ivar]
 
 
+class Model54(PreRTModelBase):
+    """
+        New cloud profile based on Galileo probe nephelometer main cloud.
+        Features a cloud centred at a specified pressure, variable FWHM 
+        below the specified pressure, defined total opacity, while density 
+        falls off as an exponential above the base pressure.
+    """
+    
+    id : int = 54
+
+    def __init__(
+            self, 
+            state_vector_start : int, 
+            #   Index of the state vector where parameters from this model start
+            
+            n_state_vector_entries : int,
+            #   Number of parameters for this model stored in the state vector
+            
+            atm_profile_type : AtmosphericProfileType,
+            #   ENUM that tells us what kind of atmospheric profile this model instance represents
+        ):
+        """
+            Initialise an instance of the model.
+        """
+        super().__init__(state_vector_start, n_state_vector_entries, atm_profile_type)
+        
+        # Define sub-slices of the state vector that correspond to
+        # parameters of the model.
+        # NOTE: It is best to define these in the same order and with the
+        # same names as they are saved to the state vector, and use the same
+        # names and ordering when they are passed to the `self.calculate(...)` 
+        # class method.
+        self.parameters = (
+            ModelParameter('opacity', slice(0,1), 'a priori opacity', ''),
+            ModelParameter('peak_pressure', slice(1,2), 'a priori pressure where the distribution peaks', 'atm'),
+            ModelParameter('above_width', slice(2,3), 'a priori width above the cloud peak', 'ln(atm)'),
+            ModelParameter('below_width', slice(3,4), 'a priori width below the cloud peak', 'ln(atm)'),
+        )
+        
+        return
+
+
+    @classmethod
+    def calculate(
+            cls,
+            atm : "Atmosphere_0",
+            #   Instance of Atmosphere_0 class we are operating upon
+            
+            atm_profile_type : AtmosphericProfileType,
+            #   ENUM of atmospheric profile type we are altering.
+            
+            atm_profile_idx : int | None,
+            #   Index of the atmospheric profile we are altering (or None if the profile type does not have multiples)
+            
+            opacity : float,
+            #   a priori opacity
+            
+            peak_pressure : float,
+            #   a priori pressure where the distribution peaks (atm)
+            
+            above_width : float,
+            #   a priori width above the cloud peak (ln(atm))
+
+            below_width : float,
+            #   a priori width below the cloud peak (ln(atm))
+
+            phaze : float,
+            #   TBA
+
+            whaze : float,
+            #   TBA
+
+            MakePlot : bool = False
+        ) -> tuple["Atmosphere_0", np.ndarray]:
+        """
+            FUNCTION NAME : model54()
+
+            DESCRIPTION :
+                Function defining the model parameterisation 54 in NEMESIS.
+                New cloud profile based on Galileo probe nephelometer main cloud.
+
+            INPUTS :
+
+                atm :: Python class defining the atmosphere
+
+                atm_profile_type :: AtmosphericProfileType
+                    ENUM of atmospheric profile type we are altering.
+
+                atm_profile_idx :: int | None
+                    Index of the atmospheric profile we are altering (or None if the profile type does not have multiples)
+
+                opacity :: float
+                    a priori opacity
+                
+                peak_pressure :: float
+                    a priori pressure where the distribution peaks
+                
+                above_width :: float
+                    a priori width above the cloud peak (ln(atm))
+
+                below_width :: float
+                    a priori width below the cloud peak (ln(atm))
+
+                phaze :: float
+                    TBA
+
+                whaze :: float
+                    TBA
+
+            OPTIONAL INPUTS:
+
+                MakePlot :: If True, a summary plot is generated
+                
+            OUTPUTS :
+
+                atm :: Updated atmosphere class
+                xmap(4,npro) :: Matrix of relating funtional derivatives to
+                                elements in state vector
+
+            MODIFICATION HISTORY : Michelle Colantoni (05/05/2026)
+        """
+
+        xdeep = opacity
+        pknee = peak_pressure
+        xwid = above_width
+        xwid1 = below_width
+
+        y0 = -np.log(pknee)
+        yhaze = np.log(phaze)
+
+        p_atm = np.array(atm.P, dtype=float) / 101325.0
+        xmap = np.zeros((4, atm.NP))
+
+        if any(p_atm < pknee):
+            k = np.searchsorted(-p_atm, -pknee) - 1
+            khaze = np.searchsorted(-p_atm, -phaze) - 1
+        else:
+            _msg = f'Model id={cls.id} cannot find KNEE.'
+            _lgr.error(_msg)
+            raise ValueError(_msg)
+
+        q = np.zeros(atm.NP)
+        y=-np.log(p_atm)
+
+        q[:k] = np.exp(-((y[:k]-y0)/xwid1)**2)
+        q[k:] = np.exp(-(y[k:]-y0)/xwid)
+
+        xfac = np.zeros(atm.NP)
+        xfac[khaze:] = 1.0 - np.exp(-((y[khaze:]-yhaze)/whaze)**2)
+        
+        q = q * xfac
+
+        # DOUBLE CHECK!!
+        xmolwt = atm.MOLWT
+
+        R = const.R
+        scale = R * atm.T / (atm.MOLWT * atm.GRAV)
+            
+        rho = (0.1013 * xmolwt / R) * (p_atm / atm.T)
+        
+        nd = q * rho
+        od = nd * scale * 1e5
+        xod = np.sum(od)
+        
+        # Empirical correction to XOD
+        xod = xod * 0.25
+        
+        x1 = np.float32(q*xdeep/xod)
+        y=np.log(p_atm)
+        x1[x1 < 1e-36] = 1e-36
+        
+        xmap[0, :] = x1
+
+        # IF(VARIDENT(IVAR,1).EQ.0) in Fortran
+        if atm_profile_type == AtmosphericProfileType.TEMPERATURE:
+            xmap[0, :] = x1 / xdeep
+        
+        # See FORTRAN code for details.
+        xmap[1, :] = 0.0 
+        xmap[2, :] = 0.0
+
+        if MakePlot==True:
+            fig,(ax1,ax2) = plt.subplots(1,2,figsize=(7,4))
+            ax1.semilogy(atm.VMR[:,atm_profile_idx], p_atm)
+            ax1.set_ylim(p_atm.max(), p_atm.min())
+            ax1.set_xlabel('VMR')
+            ax1.set_ylabel('Pressure (atm)')
+            ax1.grid()
+
+            ax2.plot(atm.T, p_atm)
+            ax2.set_ylim(p_atm.max(), p_atm.min())
+            ax2.set_xlabel('Temperature (K)')
+            ax2.set_ylabel('Pressure (atm)')
+            ax2.grid()
+
+            plt.tight_layout()
+            plt.show()
+
+        return atm, xmap
+
+    @classmethod
+    def from_apr_to_state_vector(
+            cls,
+            variables : "Variables_0",
+            f : IO,
+            varident : np.ndarray[[3],int],
+            varparam : np.ndarray[["mparam"],float],
+            ix : int,
+            lx : np.ndarray[["mx"],int],
+            x0 : np.ndarray[["mx"],float],
+            sx : np.ndarray[["mx","mx"],float],
+            inum : np.ndarray[["mx"],int],
+            npro : int,
+            ngas : int,
+            ndust : int,
+            nlocations : int,
+            runname : str,
+            sxminfac : float,
+        ) -> Self:
+        ix_0 = ix
+        # *** model 54 *******
+        tmp = np.fromstring(f.readline().rsplit('!', 1)[0], sep=' ', count=2, dtype=float) # Use "!" as comment character in *.apr files
+        phaze = tmp[0]
+        whaze = tmp[1]
+        tmp = np.fromstring(f.readline().rsplit('!', 1)[0], sep=' ', count=2, dtype=float)
+        xdeep = tmp[0]
+        edeep = tmp[1]
+        tmp = np.fromstring(f.readline().rsplit('!', 1)[0], sep=' ', count=2, dtype=float)
+        pknee = tmp[0]
+        eknee = tmp[1]
+        tmp = np.fromstring(f.readline().rsplit('!', 1)[0], sep=' ', count=2, dtype=float)
+        xwid = tmp[0]
+        ewid = tmp[1]
+        tmp = np.fromstring(f.readline().rsplit('!', 1)[0], sep=' ', count=2, dtype=float)
+        xwid1 = tmp[0]
+        ewid1 = tmp[1]
+
+        varparam[0] = phaze
+        varparam[1] = whaze
+
+        # opacity
+        if xdeep > 0.0:
+            x0[ix] = np.log(xdeep)
+            lx[ix] = 1
+        else:
+            raise ValueError(f'Model54 xdeep must be > 0 for log retrieval, got {xdeep}')
+        
+        err = edeep / xdeep
+        sx[ix,ix] = err**2.
+
+        ix += 1
+
+        # pressure at distribution peak
+        if pknee > 0.0:
+            x0[ix] = np.log(pknee)
+            lx[ix] = 1
+        else:
+            raise ValueError(f'Model54 pknee must be > 0 for log retrieval, got {pknee}')
+        
+        err = eknee / pknee
+        sx[ix,ix] = err**2.
+
+        ix += 1
+
+        # width above cloud peak
+        if xwid > 0.0:
+            x0[ix] = np.log(xwid)
+            lx[ix] = 1
+        else:
+            raise ValueError(f'Model54 xwid must be > 0 for log retrieval, got {xwid}')
+        
+        err = ewid / xwid
+        sx[ix,ix] = err**2.
+
+        ix += 1
+
+        # width below cloud peak
+        if xwid1 > 0.0:
+            x0[ix] = np.log(xwid1)
+            lx[ix] = 1
+        else:
+            raise ValueError(f'Model54 xwid1 must be > 0 for log retrieval, got {xwid1}')
+        
+        err = ewid1 / xwid1
+        sx[ix,ix] = err**2.
+
+        ix += 1
+
+        model_classification = variables.classify_model_type_from_varident(varident, ngas, ndust)
+        assert issubclass(cls, model_classification[0]), (
+            "Model base class must agree with the classification from "
+            "Variables_0::classify_model_type_from_varident"
+        )
+
+        return cls(ix_0, ix - ix_0, model_classification[1])
+    
+    @classmethod
+    def from_bookmark(
+            cls,
+            variables : "Variables_0",
+            varident : np.ndarray[[3],int],
+            varparam : np.ndarray[["mparam"],float],
+            ix : int,
+            npro : int,
+            ngas : int,
+            ndust : int,
+            nlocations : int,
+        ) -> Self:
+        ix_0 = ix
+        #******** profile defined by opacity and peak pressure ********
+        #******** with above and below peak width ********
+        if varident[2] != cls.id:
+            raise ValueError('error in Model54.from_bookmark() :: wrong model id')
+
+        ix = ix + 5
+
+        model_classification = variables.classify_model_type_from_varident(varident, ngas, ndust)
+        assert issubclass(cls, model_classification[0]), "Model base class must agree with the classification from Variables_0::classify_model_type_from_varident"
+
+        return cls(ix_0, ix-ix_0, model_classification[1])
+    
+    def calculate_from_subprofretg(
+            self,
+            forward_model : "ForwardModel_0",
+            ix : int,
+            ipar : int,
+            ivar : int,
+            xmap : np.ndarray,
+        ) -> None:
+        #Model 54. Density falls off as an exponential above the base pressure
+        #***************************************************************
+        
+        atm = forward_model.AtmosphereX
+        atm_profile_type, atm_profile_idx = atm.ipar_to_atm_profile_type(ipar)
+
+        xdeep, pknee, xwid, xwid1 = self.get_parameter_values_from_state_vector(
+            forward_model.Variables.XN,
+            forward_model.Variables.LX
+        )
+
+        phaze = forward_model.Variables.VARPARAM[ivar,0]
+        whaze = forward_model.Variables.VARPARAM[ivar,1]
+
+        atm, xmap1 = self.calculate(
+            atm,
+            atm_profile_type,
+            atm_profile_idx,
+            xdeep,
+            pknee, 
+            xwid, 
+            xwid1,
+            phaze,
+            whaze,
+            MakePlot=False
+        )
+
+        forward_model.AtmosphereX = atm
+        xmap[self.state_vector_slice, ipar, 0:forward_model.AtmosphereX.NP] = xmap1
+        
+        return
+
+
 class Model57(PreRTModelBase):
     """
         Gas profile where the abundance is constant up to a knee pressure and then falls 
