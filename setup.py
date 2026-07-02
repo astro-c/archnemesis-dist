@@ -6,7 +6,7 @@ long_description = (this_directory / "README.md").read_text(encoding="utf-8")
 
 setup(
     name="archnemesis",
-    version="1.0.6",
+    version="1.1.0",
     author="Juan Alday",
     description="Python implementation of the NEMESIS radiative transfer and retrieval code",
     long_description=long_description,
@@ -33,7 +33,8 @@ setup(
       'pytest',
       'corner',
       'typing_extensions',
-      'hitran-api'
+      'hitran-api',
+      'beautifulsoup4',
     ],
     extras_require={
         'grib': ['pygrib'],
@@ -44,5 +45,5 @@ setup(
         "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
         "Operating System :: OS Independent",
     ],
-    python_requires='>=3.8',
+    python_requires='>=3.10',
 )

@@ -26,7 +26,7 @@ import numpy as np
 import h5py
 
 import archnemesis.Data.constants as const
-from archnemesis.enums import PlanetEnum, AtmosphericProfileFormatEnum, SpectraUnit, SpectralCalculationMode
+from archnemesis.enum import PlanetEnum, AtmosphericProfileFormatEnum, SpectraUnitEnum, SpectralCalculationModeEnum
 import archnemesis.helpers.h5py_helper as h5py_helper
 
 import logging
@@ -317,7 +317,7 @@ class Telluric_0:
         #Reading the VMRs for CH4,CO2,CO and N2O
         ############################################################################################
         
-        Atmosphere_CIRC = Atmosphere_0(runname=archnemesis_path()+'archnemesis/Data/reference_profiles/earth_circ_case1')
+        Atmosphere_CIRC = Atmosphere_0(runname=archnemesis_path()+'/archnemesis/Data/reference_profiles/earth_circ_case1')
         Atmosphere_CIRC.read_ref()
         
         ico2 = np.where(Atmosphere_CIRC.ID==2)[0][0]
@@ -387,7 +387,7 @@ class Telluric_0:
         #Reading the VMRs for CH4,CO2,CO and N2O
         ############################################################################################
         
-        Atmosphere_CIRC = Atmosphere_0(runname=archnemesis_path()+'archnemesis/Data/reference_profiles/earth_circ_case1')
+        Atmosphere_CIRC = Atmosphere_0(runname=archnemesis_path()+'/archnemesis/Data/reference_profiles/earth_circ_case1')
         Atmosphere_CIRC.read_ref()
         
         self.Atmosphere = Atmosphere_CIRC
@@ -429,7 +429,7 @@ class Telluric_0:
         Scatter.SOL_ANG = 0.
         Scatter.AZI_ANG = 0.
         Measurement = Measurement_0()
-        Measurement.IFORM = SpectraUnit.Radiance
+        Measurement.IFORM = SpectraUnitEnum.Radiance
         
         #Calculating the path
         FM = ForwardModel_0(Spectroscopy=self.Spectroscopy,Atmosphere=self.Atmosphere)
@@ -442,7 +442,7 @@ class Telluric_0:
         
         #Calculating the optical depth along the line-of-sight
         ########################################################################################################
-        if self.Spectroscopy.ILBL==SpectralCalculationMode.LINE_BY_LINE_TABLES:  #LBL-table
+        if self.Spectroscopy.ILBL==SpectralCalculationModeEnum.LINE_BY_LINE_TABLES:  #LBL-table
 
             #Calculating the cross sections for each gas in each layer
             k = self.Spectroscopy.calc_klbl(len(tlay),play/101325.,tlay,WAVECALC=self.Spectroscopy.WAVE)
@@ -453,7 +453,7 @@ class Telluric_0:
                 igas = np.where( (self.Atmosphere.ID==self.Spectroscopy.ID[i]) & (self.Atmosphere.ISO==self.Spectroscopy.ISO[i]) )[0][0]
 
                 #Calculating vertical column density in each layer
-                VLOSDENS = amounts[igas,:] * 1.0e-4 * 1.0e-20   #cm-2
+                VLOSDENS = amounts[igas,:] * 1.0e-4   #cm-2
 
                 #Calculating vertical opacity for each gas in each layer
                 TAUGAS[:,0,:,i] = k[:,:,i] * VLOSDENS
@@ -463,20 +463,22 @@ class Telluric_0:
             #Removing necessary data to save memory
             del k
 
-        elif self.Spectroscopy.ILBL==SpectralCalculationMode.LINE_BY_LINE_RUNTIME:  #Line-by-line
+        elif self.Spectroscopy.ILBL==SpectralCalculationModeEnum.LINE_BY_LINE_RUNTIME:  #Line-by-line
 
+            igas = np.empty((self.Spectroscopy.NGAS,), dtype=int)
+            for i, (mol_id, iso_id) in enumerate(zip(self.Spectroscopy.ID,self.Spectroscopy.ISO)):
+                igas[i] = self.Atmosphere.locate_gas(mol_id, iso_id)
+            
             self_frac = np.mean((Layer.PP.T / Layer.PRESS),axis=1) #(NGAS) average volume mixing ratio of each gas
-            self_fracx = np.zeros(self.Spectroscopy.NGAS)
-            for i in range(self.Spectroscopy.NGAS):
-                igas = self.Atmosphere.locate_gas(self.Spectroscopy.ID[i],self.Spectroscopy.ISO[i])
-                self_fracx[i] = self_frac[igas]
+            amb_frac = np.ones((self.Spectroscopy.NGAS,1), dtype=float)
+            amb_frac[:,0] = 1.0 - self_frac[igas]
 
             #Converting IDs into list
             self.Spectroscopy.ID = np.atleast_1d(self.Spectroscopy.ID).astype(int).tolist()
             self.Spectroscopy.ISO = np.atleast_1d(self.Spectroscopy.ISO).astype(int).tolist()
 
             #Calculating the absorption cross sections
-            k = self.Spectroscopy.calc_klbl_online(len(tlay),play/101325.,tlay,self_frac=self_fracx,wave=None,add_pressure_shift=True)
+            k = self.Spectroscopy.calc_klbl_online(len(tlay),play/101325.,tlay,amb_frac=amb_frac,wave=None)
 
             #Calculating the optical depths
             TAUGAS = np.zeros((self.Spectroscopy.NWAVE,self.Spectroscopy.NG,len(tlay),self.Spectroscopy.NGAS))  #Vertical opacity of each gas in each layer
@@ -484,7 +486,7 @@ class Telluric_0:
                 IGAS = self.Atmosphere.locate_gas(self.Spectroscopy.ID[i],self.Spectroscopy.ISO[i])
 
                 #Calculating vertical column density in each self.LayerX
-                VLOSDENS = Layer.AMOUNT[:,IGAS].T * 1.0e-24   #m-2
+                VLOSDENS = Layer.AMOUNT[:,IGAS].T * 1.0e-4   #m-2
 
                 #Calculating vertical opacity for each gas in each self.LayerX
                 TAUGAS[:,0,:,i] = k[:,:,i] * VLOSDENS
@@ -492,7 +494,7 @@ class Telluric_0:
             #Combining the gaseous opacity in each self.LayerX
             TAUGAS = np.sum(TAUGAS,3) #(NWAVE,NG,NLAY)
 
-        elif self.Spectroscopy.ILBL==SpectralCalculationMode.K_TABLES:    #K-table
+        elif self.Spectroscopy.ILBL==SpectralCalculationModeEnum.K_TABLES:    #K-table
             
             #Calculating the k-coefficients for each gas in each layer
             k_gas = self.Spectroscopy.calc_k(len(tlay),play/101325.,tlay,WAVECALC=self.Spectroscopy.WAVE) # (NWAVE,NG,NLAY,NGAS)
@@ -501,7 +503,7 @@ class Telluric_0:
             #utotl = np.zeros(len(tlay))
             for i in range(self.Spectroscopy.NGAS):
                 igas = np.where( (self.Atmosphere.ID==self.Spectroscopy.ID[i]) & (self.Atmosphere.ISO==self.Spectroscopy.ISO[i]) )[0][0]
-                f_gas[i,:] = amounts[igas,:] * 1.0e-4 * 1.0e-20  #Vertical column density of the radiatively active gases in cm-2
+                f_gas[i,:] = amounts[igas,:] * 1.0e-4  #Vertical column density of the radiatively active gases in cm-2
 
             #Combining the k-distributions of the different gases in each layer
             k_layer = k_overlap(self.Spectroscopy.DELG,k_gas,f_gas)
