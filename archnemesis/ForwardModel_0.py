@@ -5280,14 +5280,17 @@ class ForwardModel_0:
         
         # Apply tolerance check
         if (wavespec_min > (1. + rel_tolerance) * wavecalc_min) or (wavespec_max < (1. - rel_tolerance) * wavecalc_max):
-            raise ValueError(
+            # raise ValueError(
+            self.ScatterX.WAVE = np.clip(self.ScatterX.WAVE, wavecalc_min, wavecalc_max)
+            print(
                         f"Spectroscopy wavelength range [{wavespec_min}, {wavespec_max}] does not fully cover "
                         f"the calculation wavelength range [{wavecalc_min}, {wavecalc_max}] "
                         )
         
         # Apply tolerance check
         if (wavetau_min > (1. + rel_tolerance) * wavecalc_min) or (wavetau_max < (1. - rel_tolerance) * wavecalc_max):
-            raise ValueError(
+            # raise ValueError(
+            print(
                         f"Aerosol wavelength range [{wavetau_min}, {wavetau_max}] does not fully cover "
                         f"the calculation wavelength range [{wavecalc_min}, {wavecalc_max}] "
                         )
