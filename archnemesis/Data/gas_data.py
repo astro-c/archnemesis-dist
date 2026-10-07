@@ -31,7 +31,7 @@ look_up(gas_name):
     look up information about a molecule using the RADTRAN data base.
 """
 
-import logging
+import archnemesis.cfg.logs as logging
 _lgr = logging.getLogger(__name__)
 _lgr.setLevel(logging.DEBUG)
 
@@ -70,6 +70,17 @@ def id_to_name(gasid,isoid):
         return gas_info[str(gasid)]["name"]
     else:
         return gas_info[str(gasid)]["isotope"][str(isoid)]["name"]
+
+
+def id_to_label(gasid,isoid):
+    """
+    Return the number of the molecule or isotope
+    """
+    
+    gasname = id_to_name(gasid,isoid)
+    labelname = molecule_to_latex(gasname)
+
+    return "$"+labelname+"$"
 
 
 def replace_str_outside_brackets(text, x, replacement = ''):
@@ -135,6 +146,42 @@ def molecule_to_latex(formula):
     formula = re.sub(r'([A-Z][a-z]*)(\d*)', add_subscripts, formula)
     return formula
 
+
+def molecule_to_html(formula):
+    """
+    Convert a molecular formula into HTML.
+
+    Examples
+    --------
+    H2O            -> H<sub>2</sub>O
+    (13C)O2        -> <sup>13</sup>C O<sub>2</sub>
+    H2(18O)        -> H<sub>2</sub><sup>18</sup>O
+    HD(16O)        -> HD<sup>16</sup>O
+    """
+
+    import re
+
+    # Convert isotopes in parentheses: (13C) -> <sup>13</sup>C
+    formula = re.sub(
+        r"\((\d+)([A-Z][a-z]*)\)",
+        r"<sup>\1</sup>\2",
+        formula,
+    )
+
+    # Add subscripts to element counts
+    def add_subscripts(match):
+        element, number = match.groups()
+        if number:
+            return f"{element}<sub>{number}</sub>"
+        return element
+
+    formula = re.sub(
+        r"([A-Z][a-z]*)(\d*)",
+        add_subscripts,
+        formula,
+    )
+
+    return formula
 
 
 unit = {
@@ -296,6 +343,10 @@ gas_id = {
     'COFCl': 142,
     'HONO': 143,
     'ClNO2': 144,
+    'RuO4': 145,
+    'H2C3H2': 146,
+    'C': 147,
+    'HCO+': 148,
 }
 
 atom_mass = {
@@ -467,6 +518,18 @@ gas_info = {
                 "mass": 20.022915,
                 "id": 622,
             },
+            "8": {
+                "name": "D2(18O)",
+                "abun": 1.20987E-08,
+                "mass": 22.027160,
+                "id": 628,
+            },
+            "9": {
+                "name": "D2(17O)",
+                "abun": 2.41974E-08,
+                "mass": 21.027130,
+                "id": 627,
+            },
         },
         "mmw": 18.01529586265
     },
@@ -617,6 +680,25 @@ gas_info = {
                 "mass": 45.005280,
                 "id": 447,
             },
+            "6": {
+                "name": "(14N)(15N)(18O)",
+                "abun": 7.300807E-04,
+                "mass": 47.005280,
+                "id": 458,
+            },
+            "7": {
+                "name": "(15N)(14N)(18O)",
+                "abun": 7.300807E-04,
+                "mass": 47.005280,
+                "id": 548,
+            },
+            "8": {
+                "name": "(15N)2(16O)",
+                "abun": 1.338574E-04,
+                "mass": 46.005280,
+                "id": 556,
+            },
+
         },
         "mmw": 44.01138631291001
     },
@@ -1097,6 +1179,12 @@ gas_info = {
                 "abun": 3.62174E-03,
                 "mass": 28.0079,
                 "id": 125,
+            },
+            "4": {
+                "name": "D(12C)(14N)",
+                "abun": 1.534456E-04,
+                "mass": 28.0079,
+                "id": 224,
             }
         },
         "mmw": 27.02030302071
@@ -1312,7 +1400,7 @@ gas_info = {
                 "name": "(12C)3H8",
                 "abun": 1.0,
                 "mass": 44.0,
-                "id": 211,
+                "id": 221,
             }
         },
         "mmw": 44.0
@@ -1504,7 +1592,7 @@ gas_info = {
                 "name": "(12C)H3(16O)H",
                 "abun": 9.85930E-01,
                 "mass": 32.0262,
-                "id": 211,
+                "id": 216,
             }
         },
         "mmw": 31.575591366
@@ -1514,10 +1602,16 @@ gas_info = {
         "isotope": {
             "1": {
                 "name": "H",
-                "abun": 1.0,
-                "mass": 1.00794,
+                "abun": 0.999885,
+                "mass": 1.00782503223,
                 "id": 1,
-            }
+            },
+            "2": {
+                "name": "D",
+                "abun": 0.000115,
+                "mass": 2.01410177812,
+                "id": 1,
+            },
         },
         "mmw": 1.00794
     },
@@ -1528,7 +1622,7 @@ gas_info = {
                 "name": "(12C)6H6",
                 "abun": 1.0,
                 "mass": 78.11,
-                "id": 221,
+                "id": 266,
             }
         },
         "mmw": 78.11
@@ -1540,7 +1634,7 @@ gas_info = {
                 "name": "(12C)H3(12C)(14N)",
                 "abun": 9.73866E-01,
                 "mass": 41.026550,
-                "id": 241,
+                "id": 234,
             }
         },
         "mmw": 41.05
@@ -1810,48 +1904,28 @@ gas_info = {
         "name": "HNC",
         "isotope": {
             "1": {
-                "abun": 1.0,
+                "name": "(1H)(14N)(12C)",
+                "abun": 9.851140e-01,
                 "mass": 27.0,
                 "id": 142,
-                "partition": [
-                    0.349399,
-                    0.459311,
-                    2.92041e-06,
-                    -3.51095e-09
-                ]
             },
             "2": {
+                "name": "H(14N)(13C)",
                 "abun": 0.01053,
                 "mass": 28.0,
                 "id": 143,
-                "partition": [
-                    0.357422,
-                    0.477576,
-                    9.6211e-06,
-                    -2.27844e-08
-                ]
             },
             "3": {
+                "name": "H(15N)(12C)",
                 "abun": 0.01538,
                 "mass": 28.0,
                 "id": 152,
-                "partition": [
-                    0.353799,
-                    0.46832,
-                    6.59346e-06,
-                    -1.42053e-08
-                ]
             },
             "4": {
+                "name": "D(14N)(12C)",
                 "abun": 0.000117,
                 "mass": 28.0,
                 "id": 242,
-                "partition": [
-                    0.34557,
-                    0.545889,
-                    2.50195e-06,
-                    -2.46926e-09
-                ]
             }
         },
         "mmw": 27.728756
@@ -3316,6 +3390,138 @@ gas_info = {
         },
         "mmw": 81.
     },
+    "145": {
+        "name": "RuO4",
+        "isotope": {
+            "1": {
+                "name": "(102Ru)(16O)4",
+                "abun": 0.3155,
+                "mass": 166.0,
+                "id": 102,
+            },
+            "2": {
+                "name": "(104Ru)(16O)4",
+                "abun": 0.1862,
+                "mass": 168.0,
+                "id": 104,
+            },
+            "3": {
+                "name": "(101Ru)(16O)4",
+                "abun": 0.1706,
+                "mass": 165.0,
+                "id": 101,
+            },
+            "4": {
+                "name": "(99Ru)(16O)4",
+                "abun": 0.1276,
+                "mass": 163.0,
+                "id": 99,
+            },
+            "5": {
+                "name": "(100Ru)(16O)4",
+                "abun": 0.1260,
+                "mass": 164.0,
+                "id": 100,
+            },
+            "6": {
+                "name": "(97Ru)(16O)4",
+                "abun": 0.00000E+00,
+                "mass": 161.0,
+                "id": 97,
+            },
+            "7": {
+                "name": "(98Ru)(16O)4",
+                "abun": 0.0187,
+                "mass": 162.0,
+                "id": 98,
+            },
+            "8": {
+                "name": "(106Ru)(16O)4",
+                "abun": 0.00000E+00,
+                "mass": 170.0,
+                "id": 106,
+            },
+            "9": {
+                "name": "(103Ru)(16O)4",
+                "abun": 0.00000E+00,
+                "mass": 167.0,
+                "id": 103,
+            },
+            "10": {
+                "name": "(96Ru)(16O)4",
+                "abun": 0.054,
+                "mass": 160.0,
+                "id": 96,
+            },
+        },
+        "mmw": 165.1598
+    },
+    "146": {
+        "name": "H2C3H2",
+        "isotope": {
+            "1": {
+                "name": "H2(12C)3H2",
+                "abun": 1.00000E+00,
+                "mass": 40.066845,
+                "id": 121,
+            },
+        },
+        "mmw": 40.066845
+    },
+    "147": {
+        "name": "C",
+        "isotope": {
+            "1": {
+                "name": "(12C)",
+                "abun": 0.9893,
+                "mass": 12.0,
+                "id": 2,
+            },
+            "2": {
+                "name": "(13C)",
+                "abun": 0.0107,
+                "mass": 13.0034,
+                "id": 3,
+            },
+        },
+        "mmw": 12.0
+    },
+    "148": {
+        "name": "HCO+",
+        "isotope": {
+            "1": {
+                "name": "H(12C)(16O)+",
+                "abun": 0.986783,
+                "mass": 29.002191,
+                "id": 126,
+            },
+            "2": {
+                "name": "H(13C)(16O)+",
+                "abun": 0.0106728,
+                "mass": 30.005546,
+                "id": 136,
+            },
+            "3": {
+                "name": "H(12C)(18O)+",
+                "abun": 0.00202783,
+                "mass": 31.006436,
+                "id": 128,
+            },
+            "4": {
+                "name": "H(12C)(17O)+",
+                "abun": 0.000375891,
+                "mass": 30.006408,
+                "id": 127,
+            },
+            "5": {
+                "name": "D(12C)(16O)+",
+                "abun": 0.000113493,
+                "mass": 30.008468,
+                "id": 226,
+            },
+        },
+        "mmw": 29.0
+    },
 }
 
 svp_coefficients = {
@@ -3339,3 +3545,141 @@ svp_coefficients = {
     57: (11.8004, -4352.66, 0.0, 0.0),
     36: (12.8713, -2702.37, 0.0, 0.0)
 }
+
+
+def generate_isotopologue_table_html():
+    """
+    Function to generate a gas_table.html file that is directly used in the documentation
+    """
+
+    from archnemesis.Data.path_data import archnemesis_path
+
+    html = []
+
+    # =============================================================================
+    # CSS
+    # =============================================================================
+
+    html.append("""
+    <style>
+
+    details {
+        margin-bottom: 12px;
+    }
+
+    summary {
+        cursor: pointer;
+        font-size: 1.05em;
+        padding: 4px 0;
+    }
+
+    table {
+        border-collapse: collapse;
+        margin-top: 10px;
+        margin-bottom: 10px;
+    }
+
+    th, td {
+        border: 1px solid #d0d0d0;
+        padding: 8px 14px;
+        vertical-align: middle;
+    }
+
+    th {
+        background-color: #f5f5f5;
+        text-align: center;
+    }
+
+    td {
+        text-align: center;
+    }
+
+    tbody tr:hover {
+        background-color: #fafafa;
+    }
+
+    /* Column widths */
+
+    th:nth-child(1),
+    td:nth-child(1) {
+        min-width: 130px;
+    }
+
+    th:nth-child(2),
+    td:nth-child(2) {
+        min-width: 260px;
+    }
+
+    th:nth-child(3),
+    td:nth-child(3) {
+        min-width: 170px;
+    }
+
+    th:nth-child(4),
+    td:nth-child(4) {
+        min-width: 190px;
+    }
+
+    /* Left-align isotopologue names */
+
+    td:nth-child(2) {
+        text-align: left;
+    }
+
+    </style>
+    """)
+
+    # =============================================================================
+    # One dropdown per gas
+    # =============================================================================
+
+    for mol_id in sorted(gas_info, key=int):
+
+        mol = gas_info[mol_id]
+
+        html.append(f"""
+    <details>
+
+    <summary>{molecule_to_html(mol['name'])} (ID = {mol_id})</summary>
+
+    <table>
+
+    <thead>
+    <tr>
+    <th>Isotopologue ID</th>
+    <th>Isotopologue</th>
+    <th>Relative abundance</th>
+    <th>Molecular weight (g mol<sup>-1</sup>)</th>
+    </tr>
+    </thead>
+
+    <tbody>
+    """)
+
+        for iso_id in sorted(mol["isotope"], key=int):
+
+            iso = mol["isotope"][iso_id]
+
+            name = iso.get("name", "—")
+            if name != "—":
+                name = molecule_to_html(name)
+
+            html.append(f"""
+    <tr>
+    <td>{iso_id}</td>
+    <td>{name}</td>
+    <td>{iso['abun']:.8g}</td>
+    <td>{iso['mass']:.6f}</td>
+    </tr>
+    """)
+
+        html.append("""
+    </tbody>
+
+    </table>
+
+    </details>
+
+    """)
+
+    return "\n".join(html)
