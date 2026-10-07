@@ -29,7 +29,7 @@ import archnemesis.Data.constants as const
 from archnemesis.enum import PlanetEnum, AtmosphericProfileFormatEnum, SpectraUnitEnum, SpectralCalculationModeEnum
 import archnemesis.helpers.h5py_helper as h5py_helper
 
-import logging
+import archnemesis.cfg.logs as logging
 _lgr = logging.getLogger(__name__)
 
 
@@ -247,9 +247,12 @@ class Telluric_0:
         ##############################################################################################################
         
         datetime_str = f'{date} {time}'
+
+        
         
         # Define the format in which the date and time are provided
         datetime_format = '%d-%m-%Y %H:%M:%S'
+        datetime_str = normalize_datetime(datetime_str)
         
         # Convert the string to a datetime object
         dt = datetime.strptime(datetime_str, datetime_format)
@@ -299,7 +302,7 @@ class Telluric_0:
 
         #First estimation of the altitudes
         g0 = 9.80665 #m/s2
-        mmol = 0.0289644 #kg/mol
+        mmol = 0.0289644 #kg/mol molecular weight of air
         R = const.R
         
         sh = R * temp / (mmol * g0)
@@ -308,8 +311,8 @@ class Telluric_0:
         #Calculating the VMRs of H2O and O3
         ############################################################################################
         
-        # Calculate water vapour mixing ratio (w = q / (1 - q))
-        vmr_h2o = specific_humidity / (1 - specific_humidity)
+        # Calculate water vapour volume mixing ratio (mmr = q / (1 - q) ; vmr = mmr * mmol / mh2o)
+        vmr_h2o = specific_humidity / (1 - specific_humidity) * mmol / 0.018
     
         #Converting the mass mixing ratio of O3 to the volue mixing ratio
         vmr_o3 = ozone_mmr / 0.048 * mmol
@@ -411,7 +414,7 @@ class Telluric_0:
         Layer = Layer_0()
         Layer.RADIUS = self.Atmosphere.RADIUS
         Layer.LAYHT = self.ALTITUDE
-        Layer.NLAY = 31
+        Layer.NLAY = 51
         Layer.LAYTYP=2
         Layer.LAYANG=0.
         Layer.calc_layering(H=self.Atmosphere.H,P=self.Atmosphere.P,T=self.Atmosphere.T, ID=self.Atmosphere.ID,VMR=self.Atmosphere.VMR, DUST=self.Atmosphere.DUST, PARAH2=self.Atmosphere.PARAH2)
@@ -434,6 +437,11 @@ class Telluric_0:
         #Calculating the path
         FM = ForwardModel_0(Spectroscopy=self.Spectroscopy,Atmosphere=self.Atmosphere)
         FM.calc_path(Atmosphere=self.Atmosphere,Scatter=Scatter,Layer=Layer,Measurement=Measurement)
+
+        _lgr.info("Calculating telluric transmission")
+        _lgr.info(f"Altitude of observatory = {self.ALTITUDE} metres")
+        _lgr.info(f"Base Altitude and Pressure at lowest layer = {Layer.BASEH[0]} metres, {Layer.BASEP[0]} Pa")
+        _lgr.info(f"Airmass = {FM.PathX.SCALE[0,0]}")
     
         #Calculating the line-of-sight column density for each gas
         amounts = (np.transpose(Layer.AMOUNT[FM.PathX.LAYINC[:,:],:],axes=(2,0,1)) * FM.PathX.SCALE[:,:])[:,:,0] #N_col density in each layer for each gas (NVMR,NLAY)
@@ -485,12 +493,12 @@ class Telluric_0:
             for i in range(self.Spectroscopy.NGAS):
                 IGAS = self.Atmosphere.locate_gas(self.Spectroscopy.ID[i],self.Spectroscopy.ISO[i])
 
-                #Calculating vertical column density in each self.LayerX
-                VLOSDENS = Layer.AMOUNT[:,IGAS].T * 1.0e-4   #m-2
+                #Calculating vertical column density in each layer
+                VLOSDENS = amounts[IGAS,:] * 1.0e-4   #cm-2
 
-                #Calculating vertical opacity for each gas in each self.LayerX
+                #Calculating vertical opacity for each gas in each layer
                 TAUGAS[:,0,:,i] = k[:,:,i] * VLOSDENS
-                
+
             #Combining the gaseous opacity in each self.LayerX
             TAUGAS = np.sum(TAUGAS,3) #(NWAVE,NG,NLAY)
 
@@ -668,3 +676,35 @@ def extract_grib_parameter(filename,parameter,latitude,longitude):
                u*v*param_lat2_lon2[:]
 
     return param_int
+
+
+
+############################################################################################
+
+def normalize_datetime(datetime_string):
+
+    from datetime import datetime
+
+    datetime_format = "%d-%m-%Y %H:%M:%S"
+    possible_formats = (
+        "%d-%m-%Y %H:%M:%S.%f",
+        "%d-%m-%Y %H:%M:%S",
+        "%Y-%m-%d %H:%M:%S.%f",
+        "%Y-%m-%d %H:%M:%S",
+    )
+
+    for input_format in possible_formats:
+        try:
+            parsed_datetime = datetime.strptime(
+                datetime_string,
+                input_format,
+            )
+
+            return parsed_datetime.strftime(datetime_format)
+
+        except ValueError:
+            continue
+
+    raise ValueError(
+        f"Unrecognized date-time format: {datetime_string!r}"
+    )

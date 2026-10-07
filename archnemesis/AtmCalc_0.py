@@ -22,8 +22,9 @@ import numpy as np
 
 from archnemesis.enum import ZenithAngleOriginEnum, PathObserverPointingEnum, PathCalcEnum
 
-import logging
+import archnemesis.cfg.logs as logging
 _lgr = logging.getLogger(__name__)
+_lgr.setLevel(logging.INFO)
 
 """
 Object to calculate the atmospheric paths
@@ -157,7 +158,7 @@ class AtmCalc_0:
         self.EMISS_ANG = EMISS_ANG
         self.SOL_ANG = SOL_ANG
         self.AZI_ANG = AZI_ANG
-        self.IPZEN = IPZEN
+        self.IPZEN = ZenithAngleOriginEnum(IPZEN)
         self.path_calc = path_calc
         #self.WF = WF
         #self.NETFLUX = NETFLUX

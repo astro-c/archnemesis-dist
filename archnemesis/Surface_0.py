@@ -26,7 +26,7 @@ from numba import jit#, njit
 from archnemesis.enum import WaveUnitEnum, LowerBoundaryConditionEnum
 from archnemesis.helpers import h5py_helper
 
-import logging
+import archnemesis.cfg.logs as logging
 _lgr = logging.getLogger(__name__)
 
 #!/usr/local/bin/python3
@@ -265,18 +265,18 @@ class Surface_0:
                 
             elif self.NLOCATIONS in (0,1):
                 
-                assert np.issubdtype(type(self.TSURF), np.float64) == True, f"TSURF must be a float {self.TSURF=}"
+                assert np.issubdtype(type(self.TSURF), np.floating) == True, f"TSURF must be a float {self.TSURF=}"
                 
                 if self.NLOCATIONS == 0:
                     assert self.LATITUDE is None, "No locations, therefore LATITUDE must be `None`"
                     assert self.LONGITUDE is None, "No locations, therefore LONGITUDE must be `None`"
                 
                 elif self.NLOCATIONS==1:
-                    assert np.issubdtype(type(self.LATITUDE), np.float64) == True , \
+                    assert np.issubdtype(type(self.LATITUDE), np.floating) == True , \
                         f'LATITUDE must be float {self.LATITUDE=}'
                     assert abs(self.LATITUDE) < 90.0 , \
                         f'LATITUDE must be within -90 to 90 degrees {self.LATITUDE=}'
-                    assert np.issubdtype(type(self.LONGITUDE), np.float64) == True , \
+                    assert np.issubdtype(type(self.LONGITUDE), np.floating) == True , \
                         f'LONGITUDE must be float {self.LONGITUDE=}'
 
                 assert len(self.EMISSIVITY) == self.NEM , \
@@ -822,9 +822,14 @@ class Surface_0:
         @param runname: str
             Name of the Nemesis run
         """
+        fname = runname+'.sur'
+        
+        if any(x is None for x in (self.VEM, self.EMISSIVITY)):
+            _lgr.warn(f'Cannot write {fname} as not all the parameters are initialised')
+            return
         
         #Opening file
-        f = open(runname+'.sur','w')
+        f = open(fname,'w')
         f.write('%i \n' % (self.NEM))
         for i in range(self.NEM):
             f.write('%7.4e \t %7.4e \n' % (self.VEM[i],self.EMISSIVITY[i]))
@@ -1066,7 +1071,10 @@ class Surface_0:
         @param runname: str
             Name of the Nemesis run
         """
-
+        if any(x is None for x in (self.VEM,self.SGLALB,self.K,self.BS0,self.hs,self.BC0,self.hc,self.ROUGHNESS,self.G1,self.G2,self.F)):
+            _lgr.warn(f'Cannot write {runname+".hap"} file as not all the parameters are initialised.')
+            return
+        
         f = open(runname+'.hap','w')
         f.write('%i \n' % (self.NEM))
         for i in range(self.NEM):

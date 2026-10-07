@@ -21,7 +21,8 @@
 #from archnemesis import *
 #from archnemesis.Models import Models
 
-from typing import Callable
+from typing import Any, Callable
+from functools import partial
 import os
 from copy import deepcopy
 
@@ -54,7 +55,7 @@ from archnemesis.enum import (
     AerosolPhaseFunctionCalculationModeEnum,
 )
 
-import logging
+import archnemesis.cfg.logs as logging
 _lgr = logging.getLogger(__name__)
 _lgr.setLevel(logging.INFO)
 
@@ -294,7 +295,7 @@ class ForwardModel_0:
         if self.Spectroscopy.NGAS > 0:
             
             if not self.get_DONE_GAS_SPECTROSCOPY_DATA_WARNING_ONCE_FLAG():
-                _lgr.info('Checking atmospheric gasses have spectroscopy data.')
+                _lgr.debug('Checking atmospheric gasses have spectroscopy data.')
                 should_warn = False
                 
                 # Test that the forward model has Spectroscopy data for each
@@ -308,7 +309,7 @@ class ForwardModel_0:
                     spect_legacy_filename = f'{self.runname}.lls'
                 elif self.Spectroscopy.ILBL==SpectralCalculationModeEnum.LINE_BY_LINE_RUNTIME:
                     spect_table_type_str = 'line-by-line-runtime'
-                    spect_legacy_filename = None
+                    spect_legacy_filename = '[NO LEGACY LINE-BY-LINE RUNTIME FILE]'
                 else:
                     raise RuntimeError(f'Unknown SpectralCalculationMode: {self.Spectroscopy.ILBL}.')
                 #spect_table_type_str_pad = ' '*(22-len(spect_table_type_str))
@@ -332,19 +333,19 @@ class ForwardModel_0:
                 
                 if should_warn:
                     warning_lines.extend([
-                        '',
+                         '',
                         f'To deactivate this warning place a path to a {spect_table_type_str} file for these gasses in one of the following locations (depending upon your input file type):',
-                        '',
-                        '    [HDF5 Input]',
+                         '',
+                         '    [HDF5 Input]',
                         f'        In the "{self.runname}.h5" file, add an entry to "/Spectroscopy/LOCATION"',
-                        '        and update "/Spectroscopy/NGAS" appropriately.',
-                        '',
-                        '    [LEGACY Input]',
+                         '        and update "/Spectroscopy/NGAS" appropriately.',
+                         '',
+                         '    [LEGACY Input]',
                         f'        Add an entry to the "{spect_legacy_filename}" file.',
-                        '',
-                        '# END WARNING #####################################################################',
+                         '',
+                         '# END WARNING #####################################################################',
                     ])
-                    _lgr.warning('\n'.join(warning_lines))
+                    _lgr.debug('\n'.join(warning_lines))
                     self.set_DONE_GAS_SPECTROSCOPY_DATA_WARNING_ONCE_FLAG()
             
             
@@ -408,13 +409,13 @@ class ForwardModel_0:
             nemesisPT : bool = False,
             nemesisC : bool = False,
             analytical_gradient : bool = False,
+            **kwargs: Any,
         ) -> Callable[[],np.ndarray] | Callable[[],tuple[np.ndarray,np.ndarray]]:
         """
         Selects the correct method to calculate the nemesis forward model based on passed flags.
         """
         method = None
-        
-        
+
         if nemesisSO:
             method = self.nemesisSOfmg if analytical_gradient else self.nemesisSOfm
         elif nemesisL:
@@ -422,7 +423,8 @@ class ForwardModel_0:
         elif nemesisdisc:
             method = self.nemesisdiscfmg if analytical_gradient else self.nemesisdiscfm
         elif nemesisPT:
-            method = (lambda: self.nemesisPTfm(gradients=True)) if analytical_gradient else (lambda: self.nemesisPTfm(gradients=False))
+            method = self.nemesisPTfm
+            kwargs["gradients"] = analytical_gradient
         elif nemesisC:
             method = self.nemesisfmg if analytical_gradient else self.nemesisCfm
         else:
@@ -431,10 +433,13 @@ class ForwardModel_0:
         if method is None:
             raise RuntimeError('Could not select method to use when calculating nemesis forward model.')
         
-        return method
+        return partial(method, **kwargs)
         
 
-    def nemesisfm(self):
+    def nemesisfm(self,
+                    include_tau_gas=True,
+                    include_tau_dust=True,
+                    include_tau_cia=True):
 
         """
             FUNCTION NAME : nemesisfm()
@@ -443,7 +448,16 @@ class ForwardModel_0:
 
             INPUTS : none
 
-            OPTIONAL INPUTS: none
+            OPTIONAL INPUTS:
+
+                include_tau_gas : bool
+                    If False, it will not add any opacity contributions from gases
+
+                include_tau_cia : bool
+                    If False, it will not add any opacity contributions from CIA
+
+                include_tau_dust : bool
+                    If False, it will not add any opacity contributions from aerosols
 
             OUTPUTS :
 
@@ -516,7 +530,9 @@ class ForwardModel_0:
                 self.calc_path()
                 
                 #Calling CIRSrad to perform the radiative transfer calculations
-                SPEC1X = self.CIRSrad()
+                SPEC1X = self.CIRSrad(include_tau_gas=include_tau_gas,
+                                      include_tau_dust=include_tau_dust,
+                                      include_tau_cia=include_tau_cia)
 
                 if self.PathX.NPATH>1:  #If the calculation type requires several paths for a given geometry (e.g. netflux calculation)
                     SPEC1 = np.zeros((self.PathX.NPATH*self.SpectroscopyX.NWAVE,1))  #We linearise all paths into 1 measurement
@@ -534,22 +550,23 @@ class ForwardModel_0:
                     SPEC[:] = SPEC1[:,0]
 
             
-            #Applying the Telluric transmission if it exists
+            #Applying the Telluric transmission if its Spectroscopy exists
             if self.TelluricX is not None:
+                if self.TelluricX.Spectroscopy is not None:
                 
-                #Looking for the calculation wavelengths
-                wavecalc_min_tel,wavecalc_max_tel = self.Measurement.calc_wave_range(apply_doppler=False,IGEOM=IGEOM)
-                self.TelluricX.Spectroscopy.read_tables(wavemin=wavecalc_min_tel,wavemax=wavecalc_max_tel)
+                    #Looking for the calculation wavelengths
+                    wavecalc_min_tel,wavecalc_max_tel = self.Measurement.calc_wave_range(apply_doppler=False,IGEOM=IGEOM)
+                    self.TelluricX.Spectroscopy.read_tables(wavemin=wavecalc_min_tel,wavemax=wavecalc_max_tel)
+                    
+                    #Calculating the telluric transmission
+                    WAVE_TELLURIC,TRANSMISSION_TELLURIC = self.TelluricX.calc_transmission()
                 
-                #Calculating the telluric transmission
-                WAVE_TELLURIC,TRANSMISSION_TELLURIC = self.TelluricX.calc_transmission()
-            
-                #Interpolating the telluric transmission to the wavelengths of the planetary spectrum
-                wavecorr = self.MeasurementX.correct_doppler_shift(self.SpectroscopyX.WAVE)
-                TRANSMISSION_TELLURICx = np.interp(wavecorr,WAVE_TELLURIC,TRANSMISSION_TELLURIC)
-                
-                #Applying the telluric transmission to the planetary spectrum
-                SPEC *= TRANSMISSION_TELLURICx
+                    #Interpolating the telluric transmission to the wavelengths of the planetary spectrum
+                    wavecorr = self.MeasurementX.correct_doppler_shift(self.SpectroscopyX.WAVE)
+                    TRANSMISSION_TELLURICx = np.interp(wavecorr,WAVE_TELLURIC,TRANSMISSION_TELLURIC)
+                    
+                    #Applying the telluric transmission to the planetary spectrum
+                    SPEC *= TRANSMISSION_TELLURICx
                 
             
             #Convolving the spectra with the Instrument line shape or integrating over filter function
@@ -577,14 +594,15 @@ class ForwardModel_0:
 
                 SPECONV[0:self.Measurement.NCONV[IGEOM],IGEOM] = SPECONV1[0:self.Measurement.NCONV[IGEOM]]
                 
-                #Normalising measurement to a given wavelength if required
-                if self.Measurement.IFORM == SpectraUnitEnum.Normalised_radiance:
-                    SPECONV[0:self.Measurement.NCONV[IGEOM],IGEOM] /= np.interp(self.Measurement.VNORM,self.Measurement.VCONV[0:self.Measurement.NCONV[IGEOM],IGEOM],SPECONV[0:self.Measurement.NCONV[IGEOM],IGEOM])
-
 
         #Applying any changes to the computed spectra required by the state vector
         dSPECONV = np.zeros((self.Measurement.NCONV.max(),self.Measurement.NGEOM,self.Variables.NX))
         SPECONV,dSPECONV = self.subspecret(SPECONV,dSPECONV)
+
+        #Normalising measurement to a given wavelength if required
+        for IGEOM in range(self.Measurement.NGEOM):
+            if self.Measurement.IFORM == SpectraUnitEnum.Normalised_radiance:
+                SPECONV[0:self.Measurement.NCONV[IGEOM],IGEOM] /= np.interp(self.Measurement.VNORM,self.Measurement.VCONV[0:self.Measurement.NCONV[IGEOM],IGEOM],SPECONV[0:self.Measurement.NCONV[IGEOM],IGEOM])
 
         return SPECONV
 
@@ -726,23 +744,24 @@ class ForwardModel_0:
                     SPEC[:] = SPEC1[:,0]
                     dSPEC[:,:] = dSPEC1[:,0,:]
 
-            #Applying the Telluric transmission if it exists
+            #Applying the Telluric transmission if its Spectroscopy exists
             if self.TelluricX is not None:
+                if self.TelluricX.Spectroscopy is not None:
                                          
-                #Looking for the calculation wavelengths
-                wavecalc_min_tel,wavecalc_max_tel = self.Measurement.calc_wave_range(apply_doppler=False,IGEOM=IGEOM)
-                self.TelluricX.Spectroscopy.read_tables(wavemin=wavecalc_min_tel,wavemax=wavecalc_max_tel)
+                    #Looking for the calculation wavelengths
+                    wavecalc_min_tel,wavecalc_max_tel = self.Measurement.calc_wave_range(apply_doppler=False,IGEOM=IGEOM)
+                    self.TelluricX.Spectroscopy.read_tables(wavemin=wavecalc_min_tel,wavemax=wavecalc_max_tel)
+                    
+                    #Calculating the telluric transmission
+                    WAVE_TELLURIC,TRANSMISSION_TELLURIC = self.TelluricX.calc_transmission()
                 
-                #Calculating the telluric transmission
-                WAVE_TELLURIC,TRANSMISSION_TELLURIC = self.TelluricX.calc_transmission()
-            
-                #Interpolating the telluric transmission to the wavelengths of the planetary spectrum 
-                wavecorr = self.MeasurementX.correct_doppler_shift(self.SpectroscopyX.WAVE)
-                TRANSMISSION_TELLURICx = np.interp(wavecorr,WAVE_TELLURIC,TRANSMISSION_TELLURIC)
-                
-                #Applying the telluric transmission to the planetary spectrum
-                SPEC *= TRANSMISSION_TELLURICx
-                dSPEC[:,:] = (dSPEC[:,:].T * TRANSMISSION_TELLURICx).T 
+                    #Interpolating the telluric transmission to the wavelengths of the planetary spectrum 
+                    wavecorr = self.MeasurementX.correct_doppler_shift(self.SpectroscopyX.WAVE)
+                    TRANSMISSION_TELLURICx = np.interp(wavecorr,WAVE_TELLURIC,TRANSMISSION_TELLURIC)
+                    
+                    #Applying the telluric transmission to the planetary spectrum
+                    SPEC *= TRANSMISSION_TELLURICx
+                    dSPEC[:,:] = (dSPEC[:,:].T * TRANSMISSION_TELLURICx).T 
 
  
             #Convolving the spectra with the Instrument line shape or integrating over filter function
@@ -976,7 +995,6 @@ class ForwardModel_0:
             SPECONV,dSPECONV = self.subspecret(SPECONV,dSPECONV)
 
         return SPECONV
-
 
     ###############################################################################################
 
@@ -1248,7 +1266,6 @@ class ForwardModel_0:
         
         return SPECONV,dSPECONV
 
-
     ###############################################################################################
 
     def nemesisLfm(self):
@@ -1365,7 +1382,6 @@ class ForwardModel_0:
         SPECONV,dSPECONV = self.subspecret(SPECONV,dSPECONV)
 
         return SPECONV
-
 
     ###############################################################################################
 
@@ -1520,7 +1536,6 @@ class ForwardModel_0:
         
         return SPECONV,dSPECONV
 
-
     ###############################################################################################
 
     def nemesisCfm(self):
@@ -1601,6 +1616,8 @@ class ForwardModel_0:
             SPECONV,dSPECONV = self.MeasurementX.convg(self.SpectroscopyX.WAVE,SPECOUT,dSPECOUT,IGEOM='All')
         elif self.SpectroscopyX.ILBL == SpectralCalculationModeEnum.LINE_BY_LINE_TABLES:
             SPECONV = self.MeasurementX.lblconv(self.SpectroscopyX.WAVE,SPECOUT,IGEOM='All')
+        elif self.SpectroscopyX.ILBL == SpectralCalculationModeEnum.LINE_BY_LINE_RUNTIME: #LBL-runtime calculations
+            SPECONV = self.MeasurementX.lblconv(self.SpectroscopyX.WAVE,SPECOUT,IGEOM='All')
 
         return SPECONV
 
@@ -1672,22 +1689,23 @@ class ForwardModel_0:
 
             SPEC = np.sum(results_array, axis=0)
 
-            #Applying the Telluric transmission if it exists
+            #Applying the Telluric transmission if its Spectroscopy exists
             if self.TelluricX is not None:
+                if self.TelluricX.Spectroscopy is not None:
+                    
+                    #Looking for the calculation wavelengths
+                    wavecalc_min_tel,wavecalc_max_tel = self.Measurement.calc_wave_range(apply_doppler=False,IGEOM=IGEOM)
+                    self.TelluricX.Spectroscopy.read_tables(wavemin=wavecalc_min_tel,wavemax=wavecalc_max_tel)
+                    
+                    #Calculating the telluric transmission
+                    WAVE_TELLURIC,TRANSMISSION_TELLURIC = self.TelluricX.calc_transmission()
                 
-                #Looking for the calculation wavelengths
-                wavecalc_min_tel,wavecalc_max_tel = self.Measurement.calc_wave_range(apply_doppler=False,IGEOM=IGEOM)
-                self.TelluricX.Spectroscopy.read_tables(wavemin=wavecalc_min_tel,wavemax=wavecalc_max_tel)
-                
-                #Calculating the telluric transmission
-                WAVE_TELLURIC,TRANSMISSION_TELLURIC = self.TelluricX.calc_transmission()
-            
-                #Interpolating the telluric transmission to the wavelengths of the planetary spectrum
-                wavecorr = self.MeasurementX.correct_doppler_shift(self.SpectroscopyX.WAVE)
-                TRANSMISSION_TELLURICx = np.interp(wavecorr,WAVE_TELLURIC,TRANSMISSION_TELLURIC)
-                
-                #Applying the telluric transmission to the planetary spectrum
-                SPEC *= TRANSMISSION_TELLURICx
+                    #Interpolating the telluric transmission to the wavelengths of the planetary spectrum
+                    wavecorr = self.MeasurementX.correct_doppler_shift(self.SpectroscopyX.WAVE)
+                    TRANSMISSION_TELLURICx = np.interp(wavecorr,WAVE_TELLURIC,TRANSMISSION_TELLURIC)
+                    
+                    #Applying the telluric transmission to the planetary spectrum
+                    SPEC *= TRANSMISSION_TELLURICx
                 
             
             #Convolving the spectra with the Instrument line shape
@@ -1704,13 +1722,15 @@ class ForwardModel_0:
 
             SPECONV[0:self.Measurement.NCONV[IGEOM],IGEOM] = SPECONV1[0:self.Measurement.NCONV[IGEOM]]
             
-            #Normalising measurement to a given wavelength if required
-            if self.Measurement.IFORM == SpectraUnitEnum.Normalised_radiance:
-                SPECONV[0:self.Measurement.NCONV[IGEOM],IGEOM] /= np.interp(self.Measurement.VNORM,self.Measurement.VCONV[0:self.Measurement.NCONV[IGEOM],IGEOM],SPECONV[0:self.Measurement.NCONV[IGEOM],IGEOM])
-
         #Applying any changes to the computed spectra required by the state vector
         dSPECONV = np.zeros((self.Measurement.NCONV.max(),self.Measurement.NGEOM,self.Variables.NX))
         SPECONV,dSPECONV = self.subspecret(SPECONV,dSPECONV)
+
+        #Normalising measurement to a given wavelength if required
+        for IGEOM in range(self.Measurement.NGEOM):
+            if self.Measurement.IFORM == SpectraUnitEnum.Normalised_radiance:
+                SPECONV[0:self.Measurement.NCONV[IGEOM],IGEOM] /= np.interp(self.Measurement.VNORM,self.Measurement.VCONV[0:self.Measurement.NCONV[IGEOM],IGEOM],SPECONV[0:self.Measurement.NCONV[IGEOM],IGEOM])
+
 
         return SPECONV
 
@@ -1793,23 +1813,24 @@ class ForwardModel_0:
             SPEC = np.sum(results_array, axis=0)
             dSPEC = np.sum(results_array_grad, axis=0)
             
-            #Applying the Telluric transmission if it exists
+            #Applying the Telluric transmission if if its Spectroscopy exists
             if self.TelluricX is not None:
+                if self.TelluricX.Spectroscopy is not None:
+                    
+                    #Looking for the calculation wavelengths
+                    wavecalc_min_tel,wavecalc_max_tel = self.Measurement.calc_wave_range(apply_doppler=False,IGEOM=IGEOM)
+                    self.TelluricX.Spectroscopy.read_tables(wavemin=wavecalc_min_tel,wavemax=wavecalc_max_tel)
+                    
+                    #Calculating the telluric transmission
+                    WAVE_TELLURIC,TRANSMISSION_TELLURIC = self.TelluricX.calc_transmission()
                 
-                #Looking for the calculation wavelengths
-                wavecalc_min_tel,wavecalc_max_tel = self.Measurement.calc_wave_range(apply_doppler=False,IGEOM=IGEOM)
-                self.TelluricX.Spectroscopy.read_tables(wavemin=wavecalc_min_tel,wavemax=wavecalc_max_tel)
-                
-                #Calculating the telluric transmission
-                WAVE_TELLURIC,TRANSMISSION_TELLURIC = self.TelluricX.calc_transmission()
-            
-                #Interpolating the telluric transmission to the wavelengths of the planetary spectrum
-                wavecorr = self.MeasurementX.correct_doppler_shift(self.SpectroscopyX.WAVE)
-                TRANSMISSION_TELLURICx = np.interp(wavecorr,WAVE_TELLURIC,TRANSMISSION_TELLURIC)
-                
-                #Applying the telluric transmission to the planetary spectrum
-                SPEC *= TRANSMISSION_TELLURICx
-                dSPEC[:,:] = (dSPEC[:,:].T * TRANSMISSION_TELLURICx).T
+                    #Interpolating the telluric transmission to the wavelengths of the planetary spectrum
+                    wavecorr = self.MeasurementX.correct_doppler_shift(self.SpectroscopyX.WAVE)
+                    TRANSMISSION_TELLURICx = np.interp(wavecorr,WAVE_TELLURIC,TRANSMISSION_TELLURIC)
+                    
+                    #Applying the telluric transmission to the planetary spectrum
+                    SPEC *= TRANSMISSION_TELLURICx
+                    dSPEC[:,:] = (dSPEC[:,:].T * TRANSMISSION_TELLURICx).T
 
             #Convolving the spectra with the Instrument line shape
             if self.Spectroscopy.ILBL == SpectralCalculationModeEnum.K_TABLES: #k-tables
@@ -2158,15 +2179,17 @@ class ForwardModel_0:
         self.NCores = int(n_jobs_internal)
         # ------------------------------
         
-        try:
-            # Turn off warning and below logging
-            archnemesis.cfg.logs.push_packagewide_level(logging.ERROR)
-            
-            # model the spectrum
-            SPECMOD = nemesis_method()
-        finally:
-            archnemesis.cfg.logs.pop_packagewide_level()
+        #try:
+        #    # Turn off warning and below logging
+        #    archnemesis.cfg.logs.push_packagewide_level(logging.ERROR)
+        #    
+        #    # model the spectrum
+        #    SPECMOD = nemesis_method()
+        #finally:
+        #    archnemesis.cfg.logs.pop_packagewide_level()
         
+        SPECMOD = nemesis_method()
+
         if SPECMOD is not None:
             ik = 0
             for igeom in range(self.Measurement.NGEOM):
@@ -2180,6 +2203,91 @@ class ForwardModel_0:
         return YNtot
     
     ###############################################################################################
+
+    def calculate_telluric_transmission(self):
+        """
+            FUNCTION NAME : nemesisfm()
+
+            DESCRIPTION : This function computes a forward model
+
+            INPUTS : none
+
+            OPTIONAL INPUTS: none
+
+            OUTPUTS :
+
+                SPECMOD(NCONV,NGEOM) :: Modelled spectra
+
+            CALLING SEQUENCE:
+
+                ForwardModel.nemesisfm()
+
+            MODIFICATION HISTORY : Juan Alday (14/03/2022)
+
+        """
+
+
+        SPECONV = np.zeros(self.Measurement.MEAS.shape) #Initalise the array where the spectra will be stored (NWAVE,NGEOM)
+        for IGEOM in range(self.Measurement.NGEOM):
+
+            #Calculating new wave array            
+            self.Measurement.build_ils(IGEOM=IGEOM)
+            wavecalc_min,wavecalc_max = self.Measurement.calc_wave_range(apply_doppler=True,IGEOM=IGEOM)
+
+            #Reading tables in the required wavelength range
+            self.SpectroscopyX = deepcopy(self.Spectroscopy)
+            if self.SpectroscopyX.NGAS>0:
+                self.SpectroscopyX.read_tables(wavemin=wavecalc_min,wavemax=wavecalc_max)
+
+            #Changing the classes taken into account the parameters in the state vector
+            _ = self.subprofretg()  #xmap
+
+            #Applying the Telluric transmission if its Spectroscopy exists
+            if self.TelluricX is not None:
+                if self.TelluricX.Spectroscopy is not None:
+                
+                    #Looking for the calculation wavelengths
+                    wavecalc_min_tel,wavecalc_max_tel = self.Measurement.calc_wave_range(apply_doppler=False,IGEOM=IGEOM)
+                    self.TelluricX.Spectroscopy.read_tables(wavemin=wavecalc_min_tel,wavemax=wavecalc_max_tel)
+                    
+                    #Calculating the telluric transmission
+                    WAVE_TELLURIC,TRANSMISSION_TELLURIC = self.TelluricX.calc_transmission()
+                
+                    #Interpolating the telluric transmission to the wavelengths of the planetary spectrum
+                    wavecorr = self.MeasurementX.correct_doppler_shift(self.SpectroscopyX.WAVE)
+                    TRANSMISSION_TELLURICx = np.interp(wavecorr,WAVE_TELLURIC,TRANSMISSION_TELLURIC)
+                    
+            
+            #Convolving the spectra with the Instrument line shape or integrating over filter function
+            if self.Measurement.IFORM == SpectraUnitEnum.Integrated_radiance:
+                
+                #Integrating the radiance over the filter function
+                SPECONV[0:self.Measurement.NCONV[IGEOM],IGEOM] = self.Measurement.integrate_filter(self.SpectroscopyX.WAVE,TRANSMISSION_TELLURICx,IGEOM=IGEOM)
+                
+            else:
+                
+                #Convolving the spectra with the Instrument line shape
+                if self.SpectroscopyX.ILBL == SpectralCalculationModeEnum.K_TABLES: #k-tables
+                    if os.path.exists(self.runname+'.fwh')==True:
+                        FWHMEXIST=self.runname
+                    else:
+                        FWHMEXIST=''
+
+                    SPECONV1 = self.Measurement.conv(self.SpectroscopyX.WAVE,TRANSMISSION_TELLURICx,IGEOM=IGEOM,FWHMEXIST=FWHMEXIST)
+
+                elif self.SpectroscopyX.ILBL == SpectralCalculationModeEnum.LINE_BY_LINE_TABLES: #LBL-tables
+                    SPECONV1 = self.Measurement.lblconv(self.SpectroscopyX.WAVE,TRANSMISSION_TELLURICx,IGEOM=IGEOM)
+
+                elif self.SpectroscopyX.ILBL == SpectralCalculationModeEnum.LINE_BY_LINE_RUNTIME: #LBL-runtime calculations
+                    SPECONV1 = self.Measurement.lblconv(self.SpectroscopyX.WAVE,TRANSMISSION_TELLURICx,IGEOM=IGEOM)
+
+                SPECONV[0:self.Measurement.NCONV[IGEOM],IGEOM] = SPECONV1[0:self.Measurement.NCONV[IGEOM]]
+                
+        return SPECONV
+
+
+    ###############################################################################################
+
 
     def jacobian_nemesis(self, NCores=1, nemesisSO=False, nemesisL=False, nemesisC=False, nemesisdisc=False, nemesisPT=False, analytical_gradient=True):
 
@@ -2376,8 +2484,9 @@ class ForwardModel_0:
         atmospheric profile is to be retrieved. Returns 'None' if the
         parameterised model is not an atmospheric one.
         """
-        if ((varident[2]<100) 
-                    or ((varident[2]>=1000) and (varident[2]<=1100))
+        if (
+            (varident[2] < 100 or 1000 <= varident[2] <= 1100)
+            and (varident[2] != 103)
                 ):
             if varident[0]==0:     #Temperature is to be retrieved
                 ipar = self.AtmosphereX.NVMR
@@ -2389,6 +2498,22 @@ class ForwardModel_0:
                 jcont = -int(varident[0])
                 ipar = self.AtmosphereX.NVMR + jcont
             return ipar
+
+        elif(
+            (varident[2]==103)   #Telluric atmosphere
+                ):
+
+            if varident[0]==0:     #Temperature is to be retrieved
+                ipar = self.TelluricX.Atmosphere.NVMR
+            elif varident[0]>0:    #Gas VMR is to be retrieved
+                jvmr = np.nonzero( (np.array(self.TelluricX.Atmosphere.ID)==varident[0]) & (np.array(self.TelluricX.Atmosphere.ISO)==varident[1]) )[0]
+                assert len(jvmr)==1, 'Cannot have more than one gas VMR retrieved at once'
+                ipar = int(jvmr[0])
+            elif varident[0]<0: # aerosol species density is to be retrieved
+                jcont = -int(varident[0])
+                ipar = self.TelluricX.Atmosphere.NVMR + jcont
+            return ipar
+
         else:
             return None
 
@@ -2791,6 +2916,7 @@ class ForwardModel_0:
 
         """
 
+        self.MeasurementX.IPZEN = self.Measurement.IPZEN
         self.MeasurementX.NGEOM = 1
         self.MeasurementX.FWHM = self.Measurement.FWHM
         self.MeasurementX.IFORM = SpectraUnitEnum(self.Measurement.IFORM)
@@ -3048,10 +3174,12 @@ class ForwardModel_0:
         #Based on the atmospheric layering, we calculate each atmospheric path (at each tangent height)
         #NCALC = 1    #Number of calculations (geometries) to be performed
         AtmCalc_List = []
+        # Explicit limb angles are 90 degrees at the tangent layer, independent of .zen.
         iAtmCalc = AtmCalc_0(
             Layer,
             path_observer_pointing=path_observer_pointing,
-            IPZEN=ZenithAngleOriginEnum.BOTTOM,
+            IPZEN=(Measurement.IPZEN if Scatter.EMISS_ANG >= 0.0
+                   else ZenithAngleOriginEnum.BOTTOM),
             BOTLAY=botlay,
             ANGLE=angle,
             EMISS_ANG=Scatter.EMISS_ANG,
@@ -3160,12 +3288,14 @@ class ForwardModel_0:
         #Based on the atmospheric layering, we calculate each atmospheric path (at each tangent height)
         #NCALC = 1    #Number of calculations (geometries) to be performed
         AtmCalc_List = []
+        # Explicit limb angles are 90 degrees at the tangent layer, independent of .zen.
         iAtmCalc = AtmCalc_0(
             Layer,
             path_observer_pointing = path_observer_pointing,
             BOTLAY=botlay,
             ANGLE=angle,
-            IPZEN=ZenithAngleOriginEnum.BOTTOM,
+            IPZEN=(Measurement.IPZEN if Scatter.EMISS_ANG >= 0.0
+                   else ZenithAngleOriginEnum.BOTTOM),
             EMISS_ANG=Scatter.EMISS_ANG,
             SOL_ANG=Scatter.SOL_ANG,
             AZI_ANG=Scatter.AZI_ANG,
@@ -3823,8 +3953,9 @@ class ForwardModel_0:
                 amb_frac = np.ones((self.SpectroscopyX.NGAS,1), dtype=float)
                 for igas in range(self.SpectroscopyX.NGAS):
                     igas_all_isotopes = np.where( self.AtmosphereX.ID==self.SpectroscopyX.ID[igas] )[0]
-                    self_frac = np.sum(ave_vmr[igas_all_isotopes])
+                    self_frac = np.sum(ave_vmr[igas_all_isotopes]) / np.sum(ave_vmr[:])
                     amb_frac[igas,0] = 1.0 - self_frac
+
 
                 #Calculating the absorption cross sections
                 if return_grad:
@@ -3902,7 +4033,10 @@ class ForwardModel_0:
         
         return TAUCIA, dTAUCIA
 
-    def calculate_layer_opacity(self, return_grad=False):
+    def calculate_layer_opacity(self, return_grad=False,
+                                      include_tau_gas=True,
+                                      include_tau_dust=True,
+                                      include_tau_cia=True):
         #There will be different kinds of opacities:
         #   Line opacity due to gaseous absorption (K-tables or LBL-tables)
         #   Continuum opacity due to aerosols coming from the extinction coefficient
@@ -3921,9 +4055,12 @@ class ForwardModel_0:
 
         #Calculating the gaseous line opacity in each layer
         ########################################################################################################
-        TAUGAS, dTAUGAS = self.calculate_gaseous_line_opacity(return_grad)
+        if include_tau_gas is True:
+            TAUGAS, dTAUGAS = self.calculate_gaseous_line_opacity(return_grad)
+        else:
+            TAUGAS = np.zeros((self.SpectroscopyX.NWAVE,self.SpectroscopyX.NG,self.LayerX.NLAY)) #(NWAVE,NG,NLAY)
+            dTAUGAS = np.zeros((self.SpectroscopyX.NWAVE,self.SpectroscopyX.NG,self.AtmosphereX.NVMR+2+self.ScatterX.NDUST,self.LayerX.NLAY)) #(NWAVE,NG,NLAY,NGAS+2+NDUST)
         self.LayerX.TAUGAS = TAUGAS
-        
         
         #Calculating the continuum absorption by gaseous species
         #################################################################################################################
@@ -3935,7 +4072,12 @@ class ForwardModel_0:
         #Calculating the vertical opacity by CIA
         #################################################################################################################
 
-        TAUCIA, dTAUCIA = self.calculate_vertical_cia_opacity(return_grad)
+        if include_tau_cia is True:
+            TAUCIA, dTAUCIA = self.calculate_vertical_cia_opacity(return_grad)
+        else:
+            TAUCIA = np.zeros((self.SpectroscopyX.NWAVE,self.LayerX.NLAY)) #(NWAVE,NG,NLAY)
+            dTAUCIA = np.zeros((self.SpectroscopyX.NWAVE,self.LayerX.NLAY,self.AtmosphereX.NVMR+2+self.ScatterX.NDUST)) #(NWAVE,NLAY,NGAS+2+NDUST)
+
         
         if return_grad and dTAUCIA is not None:
             dTAUCON[:,0:self.AtmosphereX.NVMR,:] = dTAUCON[:,0:self.AtmosphereX.NVMR,:] + np.transpose(np.transpose(dTAUCIA[:,:,0:self.AtmosphereX.NVMR],axes=(2,0,1)) / (self.LayerX.TOTAM.T),axes=(1,0,2)) #dTAUCIA/dAMOUNT (m2)
@@ -3960,7 +4102,13 @@ class ForwardModel_0:
         #Calculating the vertical opacity by aerosols from the extinction coefficient and single scattering albedo
         #################################################################################################################
 
-        TAUDUST1,TAUCLSCAT,dTAUDUST1,dTAUCLSCAT = self.calc_tau_dust() #(NWAVE,NLAYER,NDUST)
+        if include_tau_dust is True:
+            TAUDUST1,TAUCLSCAT,dTAUDUST1,dTAUCLSCAT = self.calc_tau_dust() #(NWAVE,NLAYER,NDUST)
+        else:
+            TAUDUST1 = np.zeros((self.SpectroscopyX.WAVE, self.LayerX.NLAY, self.ScatterX.NDUST))
+            TAUCLSCAT = np.zeros((self.SpectroscopyX.WAVE, self.LayerX.NLAY, self.ScatterX.NDUST))
+            dTAUDUST1 = np.zeros((self.SpectroscopyX.WAVE, self.LayerX.NLAY, self.ScatterX.NDUST))
+            dTAUCLSCAT = np.zeros((self.SpectroscopyX.WAVE, self.LayerX.NLAY, self.ScatterX.NDUST))
 
         #Calculating the total optical depth for the aerosols
         TAUDUST1 = np.clip(np.nan_to_num(TAUDUST1),0,1e20)
@@ -4318,8 +4466,9 @@ class ForwardModel_0:
             phasex[:,0:self.ScatterX.NDUST,:] = np.transpose((phase_function[:,0:self.ScatterX.NDUST,ipath] * np.transpose(self.LayerX.TAUCLSCAT[:,:,:],axes=(1,0,2))),axes=(1,2,0))
             phasex[:,self.ScatterX.NDUST,:] = np.transpose(phase_function[:,self.ScatterX.NDUST,ipath] * np.transpose(self.LayerX.TAURAY[:,:]))
             phase = np.sum(phasex,axis=1) #(NWAVE,NLAY)
-            phase[phase>0] = phase[phase>0] / (self.LayerX.TAURAY[phase>0] + self.LayerX.TAUSCAT[phase>0])
-
+            tau_scat = self.LayerX.TAURAY + self.LayerX.TAUSCAT
+            mask = tau_scat > 0
+            phase[mask] = phase[mask] / tau_scat[mask]
             #Selecting properties across the path
             NLAYIN = self.PathX.NLAYIN[ipath]
             EMTEMP = self.PathX.EMTEMP[0:NLAYIN,ipath]
@@ -4327,7 +4476,12 @@ class ForwardModel_0:
             EMOMEGA = omega[:,:,self.PathX.LAYINC[0:NLAYIN,ipath]]
 
             #Calculating the spectrum
-            SPECOUT[:,:,ipath] = calc_singlescatt_plane_spectrum(self.MeasurementX.ISPACE,self.SpectroscopyX.WAVE,TAUTOT_LAYINC[:,:,0:NLAYIN,ipath],EMTEMP,EMOMEGA,EMPHASE,self.SurfaceX.TSURF,EMISSIVITY,BRDF[:,ipath],solar,sol_ang[ipath],emiss_ang[ipath])
+            SPECOUT[:,:,ipath] = calc_singlescatt_plane_spectrum(
+                self.MeasurementX.ISPACE, self.SpectroscopyX.WAVE,
+                self.LayerX.TAUTOT[:,:,self.PathX.LAYINC[0:NLAYIN,ipath]], # Passed Vertical Depth
+                EMTEMP, EMOMEGA, EMPHASE, self.SurfaceX.TSURF,
+                EMISSIVITY, BRDF[:,ipath], solar, sol_ang[ipath], emiss_ang[ipath]
+            )
     
             #Changing the units of the spectra
             SPECOUT[:,:,ipath] = (SPECOUT[:,:,ipath].T * xfac).T
@@ -4373,7 +4527,10 @@ class ForwardModel_0:
 
     ################################################################################################
 
-    def CIRSrad(self, return_grad=False):
+    def CIRSrad(self, return_grad=False, 
+                      include_tau_gas=True,
+                      include_tau_dust=True,
+                      include_tau_cia=True):
 
         """
             FUNCTION NAME : CIRSrad()
@@ -4386,6 +4543,15 @@ class ForwardModel_0:
             
                 return_grad : bool
                     If True, will calculate and return gradients otherwise will not.
+
+                include_tau_gas : bool
+                    If False, it will not add any opacity contributions by gases
+                
+                include_tau_dust : bool
+                    If False, it will not add any opacity contributions by aerosols
+
+                include_tau_cia : bool
+                    If False, it will not add any opacity contributions from CIA
 
             OUTPUTS :
 
@@ -4416,7 +4582,10 @@ class ForwardModel_0:
             TAUTOT_LAYINC, 
             TAUTOT_PATH, 
             dTAUTOT_LAYINC,
-        ) = self.calculate_layer_opacity(return_grad)
+        ) = self.calculate_layer_opacity(return_grad,
+                                         include_tau_gas=include_tau_gas,
+                                         include_tau_cia=include_tau_cia,
+                                         include_tau_dust=include_tau_dust)
 
         #TAUTOT_LAYINC is the line-of-sight opacity in each layer and path (NWAVE,NG,NLAYIN,NPATH)
         #TAUTOT_PATH is the line-of-sight opacity integrated across all layers (NWAVE,NG,NPATH)
@@ -5163,6 +5332,9 @@ class ForwardModel_0:
 
         SPEC = np.transpose(SPEC, (2, 1, 0))
         return SPEC
+
+
+
 
     ###############################################################################################
     def calc_brdf_matrix(self,WAVEC=None,Scatter=None,Surface=None):
@@ -6509,97 +6681,76 @@ def calc_thermal_emission_spectrumg(ISPACE,WAVE,TAUTOT_PATH,dTAUTOT_PATH,NVMR,TE
 
 ###############################################################################################
 #@jit(nopython=True)
-def calc_singlescatt_plane_spectrum(ISPACE,WAVE,TAUTOT_PATH,TEMP,OMEGA,PHASE,TSURF,EMISSIVITY,BRDF,SOLFLUX,SOL_ANG,EMISS_ANG):
+def calc_singlescatt_plane_spectrum(ISPACE,WAVE,TAUTOT_VERT,TEMP,OMEGA,PHASE,TSURF,EMISSIVITY,BRDF,SOLFLUX,SOL_ANG,EMISS_ANG):
+    """Calculate plane-parallel single-scattering radiance.
 
-
+    ``TAUTOT_VERT`` contains the *vertical* extinction optical depth of each
+    layer.  Both the direct solar beam and the emergent beam are attenuated.
+    The layer-integrated single-scattering solution is evaluated analytically.
     """
-    FUNCTION NAME : thermal_emission()
+    NWAVE, NG, NLAYIN = TAUTOT_VERT.shape
 
-    DESCRIPTION : Function to calculate the spectrum considering only thermal emission from 
-                  the surface and atmosphere (no scattering and no solar component)
+    mu = np.cos(np.deg2rad(EMISS_ANG))
+    mu0 = np.cos(np.deg2rad(SOL_ANG))
+    if mu <= 0.0:
+        raise ValueError(
+            'Plane-parallel single scattering requires EMISS_ANG < 90 degrees'
+        )
 
-    INPUTS : 
-
-        ISPACE :: Flag indicating the spectral units (0 - Wavenumber in cm-1 ; 1 - Wavelength in um)
-        WAVE(NWAVE) :: Wavenumber of wavelength array
-        TAUTOT_PATH(NWAVE,NG,NLAYIN) :: Total optical depth along the line-of-sight in each layer and wavelength
-        TEMP(NLAYIN) :: Temperature of each layer along the path (K)
-        PRESS(NLAYIN) :: Pressure of each layer along the path (Pa)
-        OMEGA(NWAVE,NG,NLAYIN) :: Single scattering albedo of each layer along the path
-        PHASE(NWAVE,NLAYIN) :: Average phase function of each layer along the path
-        TSURF :: Surface temperature (K) - If TSURF<0, then the planet is considered not to have surface
-        EMISSIVITY(NWAVE) :: Emissivity of the surface
-        BRDF(NWAVE) :: Bidirectional reflectance distributon function at the required geometry
-        SOLFLUX(NWAVE) :: Solar flux at the top of the atmosphere (W cm-2 um-1 or W cm-2 (cm-1)-1)
-        SOL_ANG :: Incident angle (degrees)
-        EMISS_ANG :: Emission angle (degrees)
-
-    OPTIONAL INPUTS:  none
-
-    OUTPUTS : 
-
-	    SPECOUT(NWAVE,NG) :: Spectrum in W cm-2 sr-1 (cm-1)-1 or W cm-2 sr-1 um-1
- 
-    CALLING SEQUENCE:
-
-	    SPECOUT = calc_singlescatt_plane_spectrum(ISPACE,WAVE,TAUTOT_PATH,TEMP,PRESS,OMEGA,PHASE,TSURF,EMISSIVITY,BRDF,SOLFLUX,SOL_ANG,EMISS_ANG)
- 
-    MODIFICATION HISTORY : Juan Alday (29/07/2021)
-
-    """
-    
-    #Getting relevant array sizes
-    NWAVE = TAUTOT_PATH.shape[0]
-    NG = TAUTOT_PATH.shape[1]
-    NLAYIN = TAUTOT_PATH.shape[2]
-    
-    #Calculating angles
-    mu = np.cos(EMISS_ANG/180.*np.pi)
-    mu0 = np.cos(SOL_ANG/180.*np.pi)
-    ssfac = mu0/(mu0+mu)
-    
-    SPECOUT = np.zeros((NWAVE,NG))  #Output spectrum
+    SPECOUT = np.zeros((NWAVE, NG))
+    sun_visible = mu0 > 0.0
 
     for iwave in range(NWAVE):
         for ig in range(NG):
-            
-            #Initialising values
-            taud = 0.
-            trold = 1.
-            specg = 0.
-            
-            #Calculating the atmospheric contribution
-            #Looping through each layer along the path
+            tau_view_above = 0.0
+            tau_sun_above = 0.0
+            specg = 0.0
+
             for j in range(NLAYIN):
-                
-                omega_lay = OMEGA[iwave,ig,j]
-                phase_lay = PHASE[iwave,j]
-                taud += TAUTOT_PATH[iwave,ig,j]
-                tr = np.exp(-taud)
-                
-                #Scattering contribution
-                specg += (trold-tr)*ssfac*omega_lay*phase_lay*SOLFLUX[iwave]/(4.*np.pi) 
-                
-                #Thermal emission contribution
-                bb = planck(ISPACE,WAVE[iwave],TEMP[j])
-                specg += (trold-tr)*bb
-                
-                trold = tr
+                dtau = max(TAUTOT_VERT[iwave, ig, j], 0.0)
 
-            #Calculating surface contribution
-            if TSURF<=0.0: #No surface contribution, getting temperature from bottom of atm
-                radground = planck(ISPACE,WAVE[iwave],TEMP[NLAYIN-1])
+                trans_view_top = np.exp(-tau_view_above)
+                trans_view_bottom = np.exp(-(tau_view_above + dtau / mu))
+
+                # LTE thermal source integrated along the observer's path.
+                bb = planck(ISPACE, WAVE[iwave], TEMP[j])
+                specg += (trans_view_top - trans_view_bottom) * bb
+
+                if sun_visible and dtau > 0.0:
+                    # Exact single-scattering integral for a homogeneous layer:
+                    # integral exp[-tau/mu0] exp[-tau/mu] d(tau)/mu.
+                    attenuation_top = np.exp(-(tau_view_above + tau_sun_above))
+                    coupling = mu0 / (mu + mu0)
+                    layer_factor = 1.0 - np.exp(-dtau * (1.0 / mu + 1.0 / mu0))
+                    specg += (
+                        attenuation_top * coupling * layer_factor
+                        * OMEGA[iwave, ig, j] * PHASE[iwave, j]
+                        * SOLFLUX[iwave] / (4.0 * np.pi)
+                    )
+
+                tau_view_above += dtau / mu
+                if sun_visible:
+                    tau_sun_above += dtau / mu0
+
+            trans_surface_view = np.exp(-tau_view_above)
+
+            if TSURF <= 0.0:
+                radground = planck(ISPACE, WAVE[iwave], TEMP[NLAYIN - 1])
             else:
-                bbsurf = planck(ISPACE,WAVE[iwave],TSURF)
-                radground = bbsurf * EMISSIVITY[iwave]
+                radground = planck(ISPACE, WAVE[iwave], TSURF) * EMISSIVITY[iwave]
+            specg += trans_surface_view * radground
 
-            specg += trold * radground
-                
-            #Calculating reflectance from the ground
-            specg += trold*SOLFLUX[iwave]*mu0*BRDF[iwave]
-            
-            SPECOUT[iwave,ig] = specg
-            
+            # Direct sunlight reflected by the surface traverses the atmosphere
+            # once downward and once upward.
+            if sun_visible:
+                trans_surface_solar = np.exp(-tau_sun_above)
+                specg += (
+                    trans_surface_view * trans_surface_solar
+                    * SOLFLUX[iwave] * mu0 * BRDF[iwave]
+                )
+
+            SPECOUT[iwave, ig] = specg
+
     return SPECOUT
 
 

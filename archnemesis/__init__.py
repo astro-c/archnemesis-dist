@@ -9,6 +9,7 @@ from .cfg import logs
 
 from . import enum
 from . import lineshape
+from . import download
 
 from .Spectroscopy_0 import *
 from .Scatter_0 import *
@@ -26,10 +27,12 @@ from .OptimalEstimation_0 import *
 from .NestedSampling_0 import *
 from .Telluric_0 import *
 from .LineData_0 import *
+from .Retrievals import *
+from .Retrieval import *
 from .Emissions_0 import *
 
 from .Models import Models
 from .Data import *
 from .Files import *
-from .Retrievals import *
 
+	

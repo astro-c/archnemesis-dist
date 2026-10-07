@@ -45,8 +45,8 @@ from archnemesis.enum import (
     #PlanetEnum, 
     #AtmosphericProfileFormatEnum, 
     #InstrumentLineshape, 
+    #WaveUnitEnum, 
     LayerTypeEnum,
-    WaveUnitEnum, 
     SpectraUnitEnum,
     SpectralCalculationModeEnum, 
     LowerBoundaryConditionEnum, 
@@ -57,7 +57,7 @@ from archnemesis.enum import (
     LayerIntegrationSchemeEnum,
 )
 
-import logging
+import archnemesis.cfg.logs as logging
 _lgr = logging.getLogger(__name__)
 
 ###############################################################################################
@@ -306,11 +306,10 @@ def read_retparam_hdf5(runname):
         #Checking if Retrieval exists
         if "/Retrieval" not in f:
             raise ValueError('error :: Retrieval is not defined in HDF5 file')
-            return None
+            return None,None,None,None,None,None,None,None
         
         if '/Retrieval/Output/Parameters' not in f:
-            raise ValueError('error :: Retrieval/Output/Parameters is not defined in HDF5 file')
-            return None
+            return None,None,None,None,None,None,None,None
 
         NVAR = h5py_helper.retrieve_data(f, 'Retrieval/Output/Parameters/NVAR', np.int32)
         NXVAR = h5py_helper.retrieve_data(f, 'Retrieval/Output/Parameters/NXVAR', np.array)

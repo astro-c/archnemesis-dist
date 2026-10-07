@@ -31,11 +31,11 @@ import matplotlib as matplotlib
 from numba import jit
 
 from archnemesis.helpers import h5py_helper
-from archnemesis.enum import InstrumentLineshapeEnum, WaveUnitEnum, SpectraUnitEnum
+from archnemesis.enum import InstrumentLineshapeEnum, WaveUnitEnum, SpectraUnitEnum, ZenithAngleOriginEnum
 from archnemesis import gauss_lobatto
 
 
-import logging
+import archnemesis.cfg.logs as logging
 _lgr = logging.getLogger(__name__)
 
 
@@ -116,6 +116,9 @@ class Measurement_0:
         Emission angle of each averaging point needed to reconstruct the FOV (when NAV > 1)
     AZI_ANG : 2D array, float (NGEOM,NAV)
         Azimuth angle of each averaging point needed to reconstruct the FOV (when NAV > 1)
+    IPZEN : ZenithAngleOriginEnum
+        Origin of angle-defined rays: 0 = bottom layer, 1 = zero altitude, 2 = atmosphere top.
+        Explicit limb rays use TANHE instead.
     TANHE : 2D array, float (NGEOM,NAV)
         Tangent height of each averaging point needed to reconstruct the FOV (when NAV > 1)
         (For limb or solar occultation observations)
@@ -240,10 +243,12 @@ class Measurement_0:
             V_DOPPLER=0.0, 
             NCONV=np.array([1],dtype="int32"), 
             NAV=np.array([1],dtype="int32"),
+            IPZEN=ZenithAngleOriginEnum.BOTTOM,
     ):
 
         #Input parameters
         self.runname = runname
+        self.IPZEN = ZenithAngleOriginEnum(IPZEN)
         self.NGEOM = NGEOM
         self.FWHM = FWHM
         #self.ISPACE = ISPACE
@@ -331,6 +336,8 @@ class Measurement_0:
         """
         Assess whether the different variables have the correct dimensions and types
         """
+
+        ZenithAngleOriginEnum(self.IPZEN)
 
         #Checking some common parameters to all cases
         assert isinstance(self.NGEOM, (int, np.integer)), 'NGEOM must be int'
@@ -568,6 +575,9 @@ class Measurement_0:
                     dset.attrs['title'] = "Wavelength for normalisation"
                     dset.attrs['units'] = 'um'
 
+            dset = h5py_helper.store_data(grp, "IPZEN", int(self.IPZEN))
+            dset.attrs["title"] = "Zenith angle origin: 0 bottom, 1 zero altitude, 2 top"
+
             #Writing the number of geometries
             dset = h5py_helper.store_data(grp, 'NGEOM', self.NGEOM)
             dset.attrs['title'] = "Number of measurement geometries"
@@ -758,6 +768,9 @@ class Measurement_0:
                 raise ValueError('error :: Measurement is not defined in HDF5 file')
             else:
 
+                self.IPZEN = ZenithAngleOriginEnum.BOTTOM
+                if 'Measurement/IPZEN' in f:
+                    self.IPZEN = ZenithAngleOriginEnum(int(f['Measurement/IPZEN'][()]))
                 self.NGEOM = h5py_helper.retrieve_data(f, 'Measurement/NGEOM', np.int32)
                 self.ISPACE = h5py_helper.retrieve_data(f, 'Measurement/ISPACE', lambda x:  WaveUnitEnum(np.int32(x)))
                 self.IFORM = h5py_helper.retrieve_data(f, 'Measurement/IFORM', lambda x:  SpectraUnitEnum(np.int32(x)))
@@ -825,11 +838,30 @@ class Measurement_0:
                          
     #################################################################################################################
             
+    def read_zen(self):
+        """Read the optional legacy .zen angle origin (default: bottom layer).
+
+        Like NEMESIS, this setting applies to angle-defined rays only, not to
+        explicit limb rays whose tangent heights are supplied in the .spx file.
+        """
+        self.IPZEN = ZenithAngleOriginEnum.BOTTOM
+        try:
+            with open(self.runname + '.zen') as f:
+                value = f.readline().split('!')[0].strip().split()
+        except FileNotFoundError:
+            return
+        try:
+            self.IPZEN = ZenithAngleOriginEnum(int(value[0]))
+        except (IndexError, ValueError) as exc:
+            raise ValueError(f'{self.runname}.zen: expected IPZEN 0, 1, or 2') from exc
+
     def read_spx(self):
     
         """
         Read the .spx file and fill the attributes and parameters of the Measurement class.
         """
+
+        self.read_zen()
 
         #Opening file
         f = open(self.runname+'.spx','r')
@@ -3055,15 +3087,23 @@ class Measurement_0:
             ax3.set_title('Spectra log scale')
             ax3.set_yscale('log')
 
-            if np.mean(self.VCONV)>30.:
+            if self.ISPACE == 0:
                 ax3.set_xlabel(r'Wavenumber (cm$^{-1}$)')
-                ax3.set_ylabel(r'Radiance (W cm$^{-2}$ sr$^{-1}$ (cm$^{-1}$)$^{-1}$)')
-                ax2.set_ylabel(r'Radiance (W cm$^{-2}$ sr$^{-1}$ (cm$^{-1}$)$^{-1}$)')
+                if self.IFORM == 0:
+                    ax3.set_ylabel(r'Radiance (W cm$^{-2}$ sr$^{-1}$ (cm$^{-1}$)$^{-1}$)')
+                    ax2.set_ylabel(r'Radiance (W cm$^{-2}$ sr$^{-1}$ (cm$^{-1}$)$^{-1}$)')
+                elif self.IFORM == 5:
+                    ax3.set_ylabel(r'Normalised radiance')
+                    ax2.set_ylabel(r'Normalised radiance')
             else:
                 ax3.set_xlabel(r'Wavelength ($\mu$m)')
-                ax3.set_ylabel(r'Radiance (W cm$^{-2}$ sr$^{-1}$ $\mu$m$^{-1}$)')
-                ax2.set_ylabel(r'Radiance (W cm$^{-2}$ sr$^{-1}$ $\mu$m$^{-1}$)')
-
+                if self.IFORM == 0:
+                    ax3.set_ylabel(r'Radiance (W cm$^{-2}$ sr$^{-1}$ $\mu$m$^{-1}$)')
+                    ax2.set_ylabel(r'Radiance (W cm$^{-2}$ sr$^{-1}$ $\mu$m$^{-1}$)')
+                elif self.IFORM == 5:
+                    ax3.set_ylabel(r'Normalised radiance')
+                    ax2.set_ylabel(r'Normalised radiance')
+                    
             ax3.grid()
 
             plt.tight_layout()
@@ -3331,7 +3371,7 @@ class Measurement_0:
 #################################################################################################################
 
 ###############################################################################################
-# @jit(nopython=True)
+@jit(nopython=True)
 def lblconv(nwave,vwave,y,nconv,vconv,ishape,fwhm):
 
     """
@@ -3426,11 +3466,6 @@ def lblconv(nwave,vwave,y,nconv,vconv,ishape,fwhm):
                     f1 = a * 1.08
             else:
                 pass
-
-            if f1==0:
-                print("HELP!!!!!!!!!")
-            elif f1 < 0:
-                print("STOPPPPPPPP")
 
             if f1>0.0:
                 yout[j] = yout[j] + f1*y[inwave[i]]
@@ -3536,6 +3571,7 @@ def lblconv_ngeom(nwave,vwave,y,nconv,vconv,ishape,fwhm):
                             f1 = numerator/denominator
                         else:
                             f1 = a * 1.08
+                    
                     if f1>0.0:
                         yout[j,:] = yout[j,:] + f1*y[inwave[i],:]
                         ynor[j,:] = ynor[j,:] + f1
