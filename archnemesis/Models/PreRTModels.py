@@ -1113,7 +1113,6 @@ class Model1(PreRTModelBase):
 
         # Initialising arrays
         p_atm = np.array(atm.P) / 101325.0  # Convert from Pa to atm
-        T = np.array(atm.T)
         h = np.array(atm.H) * 1e-3  # Convert from m to km
         x1 = np.zeros(atm.NP)
         xmap = np.zeros((2, atm.NP))
@@ -1122,37 +1121,68 @@ class Model1(PreRTModelBase):
         R = const.R
         scale = R * atm.T / (atm.MOLWT * atm.GRAV) * 1e-3  # Convert to km
 
+        # To calculate the crossover point
+        def verint(x, y, xin):
+            n = len(x)
+
+            if x[0] < x[-1]:
+                for i in range(n):
+                    if x[i] > xin:
+                        break
+            else:
+                for i in range(n):
+                    if x[i] < xin:
+                        break
+
+            if i == 0:
+                i = 1
+            if x[i - 1] == x[i]:
+                yout = y[i]
+            else:
+                yout = y[i - 1] + (y[i] - y[i - 1]) * (xin - x[i - 1]) / (x[i] - x[i - 1])
+
+            if np.isnan(yout):
+                yout = y[i]
+
+            return yout
+
         xfac = (1.0 - xfsh) / xfsh
         dxfac = -1.0 / xfsh
 
-        hknee = -np.interp(-pknee, -p_atm, -h)
-        x1[:] = xdeep
+        hknee = verint(p_atm, h, pknee)
+        jfsh = 0
 
-        # IF(VARIDENT(IVAR,1).EQ.0) in Fortran
-        if atm_profile_type == AtmosphericProfileTypeEnum.TEMPERATURE:
-            xmap[0, :] = 1.0
+        for j in range(atm.NP):
+            x1[j] = xdeep
+            # VARIDENT(IVAR,1).EQ.0 in Fortran
+            if atm_profile_type == AtmosphericProfileTypeEnum.TEMPERATURE:
+                xmap[0, j] = 1.0
+            else:
+                xmap[0, j] = x1[j]
+
+            if p_atm[j] < pknee:
+                if jfsh == 0:
+                    delh = h[j] - hknee
+                else:
+                    delh = h[j] - h[j - 1]
+
+                x1[j] = x1[j - 1] * np.exp(-delh * xfac / scale[j])
+                xmap[0, j] = xmap[0, j - 1] * np.exp(-delh * xfac / scale[j])
+                xmap[1, j] = (-delh / scale[j]) * dxfac * x1[j - 1] * np.exp(
+                    -delh * xfac / scale[j]
+                ) + xmap[1, j - 1] * np.exp(-delh * xfac / scale[j])
+
+                jfsh = 1
+
+                x1[j] = max(x1[j], 1e-36)
+
+        if atm_profile_type == AtmosphericProfileTypeEnum.GAS_VOLUME_MIXING_RATIO:
+            # Update atmosphere VMR -- no conversion necessary as unitless
+            atm.VMR[:, atm_profile_idx] = x1[:]
         else:
-            xmap[0, :] = x1
-
-        delh = np.diff(h[p_atm < pknee], prepend=hknee)
-
-        idx = np.flatnonzero(p_atm < pknee)
-        idx1 = idx[0] - 1
-
-        xcs = np.exp(-np.cumsum(delh * xfac / scale[idx]))
-
-        x1[idx] = x1[idx1] * xcs
-        xmap[0, idx] = xmap[0, idx1] * xcs
-        xmap[1, idx] = (
-            np.cumsum((-delh / scale[idx])) * dxfac * x1[idx1] * xcs
-            + xmap[1, idx1] * xcs
-        )
-
-        x1[x1 < 1e-36] = 1e-36
-
-        # Update atmosphere VMR
-        atm.VMR[:, atm_profile_idx] = x1[:]
-        # MC_NOTE : CHECK IF CORRECT TO UPDATE THE VMR PROFILE IN-PLACE
+            _msg = f"Model id={cls.id} is only defined for gas VMR profiles."
+            _lgr.error(_msg)
+            raise ValueError(_msg)
 
         if MakePlot == True:
             fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(7, 4))
@@ -2490,6 +2520,7 @@ class Model11(PreRTModelBase):
         # Initialising arrays
         p_atm = np.array(atm.P) / 101325.0  # Convert from Pa to atm
         T = np.array(atm.T)
+        h = np.array(atm.H) / 1e3 # Convert from m to km
         x1 = np.zeros(atm.NP)
         xmap = np.zeros((2, atm.NP))
 
@@ -2502,38 +2533,47 @@ class Model11(PreRTModelBase):
             _lgr.error(_msg)
             raise ValueError(_msg)
 
-        ps = np.exp(a + b / T + c * T + d * T * T)
-        p1 = p_atm * xdeep
-        ph = ps * xrh
 
-        below_sat = p1 < ps
+        ifla = 0
+        hknee = 0.0
+        for i in range(atm.NP):
+            p1 = p_atm[i] * xdeep
+            ps = np.exp(a + b / T[i] + c * T[i] + d * T[i] * T[i])
+            ph = ps * xrh
+            if p1 < ps:
+                x1[i] = xdeep
+                xmap[0, i] = x1[i]
+            else:
+                if ifla == 0:
+                    y1 = np.log(p_atm[i - 1] * xdeep)
+                    y2 = np.log(p_atm[i] * xdeep)
+                    i1 = i - 1
+                    ps1 = np.exp(a + b / T[i1] + c * T[i1] + d * T[i1] * T[i1])
 
-        x1[below_sat] = xdeep
-        xmap[0, below_sat] = xdeep
+                    yy1 = np.log(ps1)
+                    yy2 = np.log(ps)
 
-        x1[~below_sat] = ph[~below_sat] / p_atm[~below_sat]
-        xmap[1, ~below_sat] = ps[~below_sat] / p_atm[~below_sat]
+                    f = (yy1 - y1) / ((y2 - y1) - (yy2 - yy1))
 
-        ifla = 1 if np.any(~below_sat) else 0
+                    hknee = h[i - 1] + f * (h[i] - h[i - 1])
+                    ifla = 1
 
-        # Determine if RH is to apply at all levels (icond = 0) or only above the condensation level (icond = 1)
-        if icond == 0:
-            cap = p1 > ph
+                x1[i] = ph / p_atm[i]
+                xmap[1, i] = ps / p_atm[i]
 
-            x1[cap] = ph[cap] / p_atm[cap]
-            xmap[1, cap] = ps[cap] / p_atm[cap]
+            if icond == 0:
+                if p1 > ph:
+                    x1[i] = ph / p_atm[i]
+                    xmap[1, i] = ps / p_atm[i]
+                else:
+                    x1[i] = xdeep
+                    xmap[0, i] = x1[i]
 
-            x1[~cap] = xdeep
-            xmap[0, ~cap] = xdeep
+            if i > 1 and ifla == 1 and p_atm[i] < 0.3 and x1[i] > x1[i - 1]:
+                x1[i] = x1[i - 1]
+                xmap[1, i] = xmap[1, i - 1]
 
-        if ifla == 1:
-            idx = np.nanargmin(np.where(p_atm < 0.3, x1, np.nan))
-
-            # Set all VMR above the cold trap to the values at the cold trap
-            x1[idx:] = x1[idx]
-            xmap[1, idx:] = xmap[1, idx]
-
-        # Update atmosphere VMR
+        # Update atmosphere VMR - no need to convert as unitless
         atm.VMR[:, atm_profile_idx] = x1[:]
         # MC_NOTE : CHECK IF CORRECT TO UPDATE THE VMR PROFILE IN-PLACE
 
@@ -4778,9 +4818,12 @@ class Model54(PreRTModelBase):
 
         # Initialising arrays
         p_atm = np.array(atm.P) / 101325.0  # Convert from Pa to atm
+        T = np.array(atm.T)
         xmap = np.zeros((4, atm.NP))
         xmolwt = np.array(atm.MOLWT) * 1e3  # Convert from kg/mol to g/mol
         q = np.zeros(atm.NP)
+        nd = np.zeros(atm.NP)
+        od = np.zeros(atm.NP)
         xfac = np.zeros(atm.NP)
 
         # Calculate atmospheric properties
@@ -4790,48 +4833,67 @@ class Model54(PreRTModelBase):
         y0 = -np.log(pknee)
         yhaze = np.log(phaze)
 
-        if any(p_atm < pknee):
-            k = np.searchsorted(-p_atm, -pknee, side="right") - 1
-            khaze = np.searchsorted(-p_atm, -phaze, side="right") - 1
-        else:
-            _msg = f"Model id={cls.id} cannot find KNEE."
+        k=-1
+        khaze=-1
+
+        for j in range(atm.NP):
+            if p_atm[j] >= pknee and p_atm[j+1] < pknee:
+                k=j 
+            if p_atm[j] >= phaze and p_atm[j+1] < phaze:
+                khaze=j
+
+        if k < 0:
+            _msg = f"Model {cls.id} error: Cannot find KNEE."
             _lgr.error(_msg)
             raise ValueError(_msg)
 
-        # Normalising to get optical depth right
-        y = -np.log(p_atm)
+        xod=0.
 
-        # Gaussian cut-off below
-        q[: k + 1] = np.exp(-(((y[: k + 1] - y0) / xwid1) ** 2))
-        # Exponential decay above
-        q[k + 1 :] = np.exp(-(y[k + 1 :] - y0) / xwid)
+        for j in range(atm.NP):
+            y=-np.log(p_atm[j])          
 
-        xfac[: khaze + 1] = 1.0 - np.exp(-(((y[: khaze + 1] - yhaze) / whaze) ** 2))
+            if j <= k:
+                q[j] = np.exp(-((y-y0)/xwid1)**2)	
+            else:
+                q[j] = np.exp(-(y-y0)/xwid)
 
-        q = q * xfac
+            xfac = np.exp(-((y-yhaze)/whaze)**2)
+            xfac = 1.0 - xfac
 
-        rho = (0.1013 * xmolwt / R) * (p_atm / atm.T)
+            if j > khaze:
+                xfac=0.0
 
-        nd = q * rho
-        od = nd * scale * 1e5
-        xod = np.sum(od)
+            q[j] = q[j]*xfac
+            xmolwt = atm.MOLWT[j] * 1e3 
+            rho = (0.1013*xmolwt/R)*(p_atm[j]/T[j])
+            nd[j] = q[j]*rho 
+            od[j] = nd[j]*scale[j]*1e5
+            xod=xod+od[j]
 
-        # Empirical correction to XOD
-        xod = xod * 0.25
+        x1=np.float32(q)
 
-        x1 = np.float32(q * xdeep / xod)
-        y = np.log(p_atm)
-        x1[x1 < 1e-36] = 1e-36
+        xod = xod*0.25
 
-        xmap[0, :] = x1
+        for j in range(atm.NP):
+            x1[j]=np.float32(q[j]*xdeep/xod)
+            y=np.log(p_atm[j])          
+            x1[j] = max(x1[j], 1e-36)
 
-        # IF(VARIDENT(IVAR,1).EQ.0) in Fortran
-        if atm_profile_type == AtmosphericProfileTypeEnum.TEMPERATURE:
-            xmap[0, :] = x1 / xdeep
+            # VARIDENT(IVAR,1).EQ.0 in Fortran
+            if atm_profile_type == AtmosphericProfileTypeEnum.TEMPERATURE:
+                xmap[0,j]=x1[j]/xdeep
+            else:
+                xmap[0,j]=x1[j]
 
-        atm.DUST[:, atm_profile_idx] = x1
-        # MC_NOTE : CHECK IF CORRECT TO UPDATE THE DUST PROFILE IN-PLACE
-
+        if atm_profile_type == AtmosphericProfileTypeEnum.AEROSOL_DENSITY:
+            # MC_NOTE : NEED TO CONVERT UNITS?????
+            atm.DUST[:, atm_profile_idx] = x1
+            # MC_NOTE : CHECK IF CORRECT TO UPDATE THE DUST PROFILE IN-PLACE
+        else:
+            _msg = f"Model id={cls.id} is only defined for aerosol density profiles."
+            _lgr.error(_msg)
+            raise ValueError(_msg)
+        
         if MakePlot == True:
             fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(7, 4))
             ax1.semilogy(atm.VMR[:, atm_profile_idx], p_atm)
@@ -4873,9 +4935,6 @@ class Model54(PreRTModelBase):
         ix_0 = ix
         # *** model 54 *******
         tmp = np.fromstring(f.readline().rsplit("!", 1)[0], sep=" ", count=2, dtype="float")  # Use "!" as comment character in *.apr files
-        phaze = tmp[0]
-        whaze = tmp[1]
-        tmp = np.fromstring(f.readline().rsplit("!", 1)[0], sep=" ", count=2, dtype="float")
         xdeep = tmp[0]
         edeep = tmp[1]
         tmp = np.fromstring(f.readline().rsplit("!", 1)[0], sep=" ", count=2, dtype="float")
@@ -4887,6 +4946,9 @@ class Model54(PreRTModelBase):
         tmp = np.fromstring(f.readline().rsplit("!", 1)[0], sep=" ", count=2, dtype="float")
         xwid1 = tmp[0]
         ewid1 = tmp[1]
+        tmp = np.fromstring(f.readline().rsplit("!", 1)[0], sep=" ", count=2, dtype="float")
+        phaze = tmp[0]
+        whaze = tmp[1]
 
         varparam[0] = phaze
         varparam[1] = whaze
@@ -5761,7 +5823,6 @@ class Model66(PreRTModelBase):
             MODIFICATION HISTORY : Michelle Colantoni (29/05/2026)
         """
 
-        # MC_NOTE : CHECK IF NECESSARY
         if atm_profile_type != AtmosphericProfileTypeEnum.GAS_VOLUME_MIXING_RATIO:
             _msg = f"Model id={cls.id} is only defined for gas VMR profiles."
             _lgr.error(_msg)
@@ -5798,6 +5859,11 @@ class Model66(PreRTModelBase):
 
         yfac = (1.0 - yfsh) / yfsh
 
+        ifla1 = None
+        ifla2 = None
+        khaze1 = None
+        khaze2 = None
+
         jspec1 = abs(cloud1_id)
         jspec2 = abs(cloud2_id)
         jpar1 = atm.NVMR + 1 + jspec1
@@ -5813,106 +5879,130 @@ class Model66(PreRTModelBase):
             _lgr.error(_msg)
             raise ValueError(_msg)
 
-        xnow[p_atm > pcloud] = xdeep
+        for i in range(atm.NP):
 
-        ifla1 = np.flatnonzero(p_atm <= pcloud)[0]
-        xnow[ifla1] = xmid
+            if p_atm[i] > pcloud:
+                xnow = xdeep
+            else:
+                if ifla1 is None:
+                    xnow = xmid
+                    ifla1 = i
+                else:
+                    delh = h[i] - h[i - 1]
+                    xnow = x1[i - 1] * np.exp(-delh * yfac / scale[i])
+            
+            p1 = p_atm[i] * xnow
 
-        delh = np.diff(h, prepend=0)
+            ps = np.exp(a + b / T[i] + c * T[i] + d * T[i] * T[i])
 
-        ps = np.exp(a + b / T + c * T + d * T * T)
+            if p1 < ps and ifla2 == None:
+                x1[i] = xnow
+            else:
+                if ifla2 == None:
+                    ifla2 = i
+                    hcond = h[ifla2]
+                    pcond = p_atm[ifla2]
 
-        idx = np.flatnonzero(p_atm <= pcloud)[1:]
+                delh = h[i] - hcond
+                xrh1 = xrh * np.exp(-delh / xscale)
+                x1[i] = xrh1 * ps / p_atm[i]
 
-        xnow[idx] = xmid * np.exp(-np.cumsum(delh[idx] * yfac / scale[idx]))
+            if i < atm.NP - 1:
+                if p_atm[i] >= phaze1 and p_atm[i + 1] < phaze1:
+                    khaze1 = i
 
-        p1 = p_atm * xnow
+                if p_atm[i] >= phaze2 and p_atm[i + 1] < phaze2:
+                    khaze2 = i
 
-        ifla2 = np.flatnonzero(p1 >= ps)[0]
-
-        # before condensation
-        x1[:ifla2] = xnow[:ifla2]
-
-        # at and after condensation
-        hcond = h[ifla2]
-        pcond = p_atm[ifla2]
-
-        delh_cond = h[ifla2:] - hcond
-        xrh1 = xrh * np.exp(-delh_cond / xscale)
-
-        x1[ifla2:] = xrh1 * ps[ifla2:] / p_atm[ifla2:]
-
-        khaze1 = np.searchsorted(-p_atm, -phaze1, side="right") - 1
-        khaze2 = np.searchsorted(-p_atm, -phaze2, side="right") - 1
-
-        if ifla2 > 0:
-            idx = np.nanargmin(np.where(p_atm < 0.3, x1, np.nan))
-
-            # Set all VMR above the cold trap to the values at the cold trap
-            x1[idx:] = x1[idx]
+            if i > 0 and ifla2 != None and p_atm[i] < 0.3 and x1[i] > x1[i - 1]:
+                    x1[i] = x1[i - 1]
 
         # Update atmosphere VMR
         atm.VMR[:, atm_profile_idx] = x1[:]
         # MC_NOTE : CHECK IF CORRECT TO UPDATE THE VMR PROFILE IN-PLACE
 
         _lgr.debug("Model 66 diagnostics")
-        _lgr.debug(f"pcloud, pcond = {pcloud}, {pcond}")
+        # _lgr.debug(f"pcloud, pcond = {pcloud}, {pcond}")
         _lgr.debug(f"Condensing clouds = {jspec1}, {jspec2}")
         _lgr.debug(f"{ifla1=},{ifla2=}")
         _lgr.debug(f"{p_atm[ifla1]=},{p_atm[ifla2]=}")
         _lgr.debug(f"{phaze1=},{khaze1=}")
         _lgr.debug(f"{phaze2=},{khaze2=}")
 
+        if ifla2 is None:
+            ifla2 = 0
+            pcond = p_atm[ifla2]
+
         xwid1 = 0.05
+        xod = 0.0
         y0 = -np.log(pcloud)
         yhaze1 = -np.log(phaze1)
 
-        y = -np.log(p_atm)
+        for j in range(atm.NP):
+            y = -np.log(p_atm[j])
 
-        q[: ifla1 + 1] = np.exp(-(((y[: ifla1 + 1] - y0) / xwid1) ** 2))
-        q[ifla1 + 1 :] = np.exp(-(y[ifla1 + 1 :] - y0) / xwidc1)
+            if j <= ifla1:
+                q[j] = np.exp(-((y - y0) / xwid1) ** 2)
+            else:
+                q[j] = np.exp(-(y - y0) / xwidc1)
 
-        if khaze1 > 0:
-            xfac = np.exp(-(((y - yhaze1) / whaze1) ** 2))
-            xfac = 1.0 - xfac
+            if khaze1 != None:
+                xfac = np.exp(-((y - yhaze1) / whaze1) ** 2)
+                xfac = 1.0 - xfac
 
-            xfac[khaze1 + 1 :] = 0.0
+                if j > khaze1:
+                    xfac = 0.0
 
-            q = q * xfac
+                q[j] = q[j] * xfac
 
-        xmolwt = np.array(atm.MOLWT) * 1e3  # Convert from kg/mol to g/mol
+            xmolwt = atm.MOLWT[i]
 
-        rho = (0.1013 * xmolwt / R) * (p_atm / T)
+            rho = (0.1013 * xmolwt / R) * (p_atm[j] / T[j])
 
-        nd = q * rho
-        od = nd * scale * 1e5
+            nd[j] = q[j] * rho
+            od[j] = nd[j] * scale[j] * 1e5
 
-        xod = np.sum(od)
+            xod = xod + od[j]
 
-        x2 = np.float32(q)
-        x2[x2 < 1e-36] = 1e-36
+            x2[j] = np.float32(q[j])
 
+            x2[j] = max(x2[j], 1e-36)
+
+        xwid1 = 0.05
+        xod = 0.0
         y0 = -np.log(pcond)
         yhaze2 = -np.log(phaze2)
 
-        q[: ifla2 + 1] = np.exp(-(((y[: ifla2 + 1] - y0) / xwid1) ** 2))
-        q[ifla2 + 1 :] = np.exp(-(y[ifla2 + 1 :] - y0) / xwidc1)
+        for j in range(atm.NP):
 
-        if khaze2 > 0:
-            xfac = np.exp(-(((y - yhaze2) / whaze2) ** 2))
-            xfac = 1.0 - xfac
+            y = -np.log(p_atm[j])
 
-            xfac[khaze2 + 1 :] = 0.0
+            if j <= ifla2:
+                q[j] = np.exp(-((y - y0) / xwid1) ** 2)
+            else:
+                q[j] = np.exp(-(y - y0) / xwidc2)
 
-            q = q * xfac
+            if khaze2 != None:
+                xfac = np.exp(-((y - yhaze2) / whaze2) ** 2)
+                xfac = 1.0 - xfac
 
-        nd = q * rho
-        od = nd * scale * 1e5
+                if j > khaze2:
+                    xfac = 0.0
 
-        xod = np.sum(od)
+                q[j] = q[j] * xfac
 
-        x3 = np.float32(q)
-        x3[x3 < 1e-36] = 1e-36
+            xmolwt = atm.MOLWT[i]
+
+            rho = (0.1013 * xmolwt / R) * (p_atm[j] / T[j])
+
+            nd[j] = q[j] * rho
+            od[j] = nd[j] * scale[j] * 1e5
+
+            xod = xod + od[j]
+
+            x3[j] = np.float32(q[j])
+
+            x3[j] = max(x3[j], 1e-36)
 
         # Update cloud aerosols
         atm.DUST[:, cloud1_id] = x2[:]
