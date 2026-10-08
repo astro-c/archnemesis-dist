@@ -682,7 +682,7 @@ def read_mre(runname,MakePlot=False):
     retprof1 = np.zeros([nx,nvar])
     reterr1 = np.zeros([nx,nvar])
     varident = np.zeros([nvar,3],dtype='int')
-    varparam = np.zeros([nvar,5])
+    varparam = np.zeros([nvar,10])
     
     for i in range(nvar):
         
@@ -706,7 +706,13 @@ def read_mre(runname,MakePlot=False):
         parts = line.split()
         if len(parts) != 5:
             raise ValueError(f"Expected 5 floats for varparam, got: {parts}")
-        varparam[i, :] = np.array(parts, dtype=float)
+        varparam[i, :5] = np.array(parts, dtype=float)
+
+        line = f.readline().strip()
+        parts = line.split()
+        if len(parts) != 5:
+            raise ValueError(f"Expected 5 floats for varparam, got: {parts}")
+        varparam[i, 5:] = np.array(parts, dtype=float)
             
         # 4) The next line is typically the header for data lines ("i, ix, xa ...")
         #    We just read it and ignore.

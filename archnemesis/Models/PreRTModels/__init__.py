@@ -12,6 +12,7 @@ from .model_2 import Model2
 from .model_3 import Model3
 from .model_4 import Model4
 from .model_9 import Model9
+from .model_11 import Model11
 from .model_20 import Model20
 from .model_32 import Model32
 from .model_43 import Model43
@@ -20,7 +21,10 @@ from .model_47 import Model47
 from .model_49 import Model49
 from .model_50 import Model50
 from .model_51 import Model51
+from .model_54 import Model54
+from .model_57 import Model57
 from .model_62 import Model62
+from .model_66 import Model66
 from .model_103 import Model103
 from .model_110 import Model110
 from .model_111 import Model111
