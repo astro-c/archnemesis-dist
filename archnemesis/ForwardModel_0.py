@@ -2346,8 +2346,8 @@ class ForwardModel_0:
         
         xnx[:,0] = self.Variables.XN
         xnx[:,1:] = np.repeat(self.Variables.XN[:,None], self.Variables.NX, axis=1) + np.diag(self.Variables.DSTEP)
-        zeros_mask = xnx[:,1:] == 0
-        xnx[:,1:][zeros_mask] = 0.05
+        # zeros_mask = xnx[:,1:] == 0
+        # xnx[:,1:][zeros_mask] = 0.05
         
 
 
@@ -2460,11 +2460,15 @@ class ForwardModel_0:
             else:
                 ifm = i
 
-            xn1 = self.Variables.XN[inum[i]] * 1.05
-            if xn1==0.0:
-                xn1=0.05
-            if self.Variables.FIX[inum[i]] == 0:
-                KK[:,inum[i]] = (YNtot[:,ifm]-YN)/(xn1-self.Variables.XN[inum[i]])
+            ix = inum[i]
+            dx = xnx[ix, ix+1] - xnx[ix, 0]
+
+            if dx == 0.0:
+                raise ValueError(
+                    f"Zero perturbation for parameter {ix}"
+                )
+
+            KK[:, ix] = (YNtot[:, ifm] - YN) / dx
 
         return YN,KK
 
