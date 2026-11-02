@@ -157,8 +157,8 @@ class Model49(PreRTModelBase):
         scale = tmp[0]
         escale = tmp[1]
 
-        varparam[1] = profgas
-        varparam[2] = profiso
+        varparam[0] = profgas
+        varparam[1] = profiso
         x0[ix] = np.log(scale)
         lx[ix] = 1
         err = escale/scale

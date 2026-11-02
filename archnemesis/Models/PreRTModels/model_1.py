@@ -3,6 +3,7 @@
 from typing import TYPE_CHECKING, Self, IO
 
 import numpy as np
+import matplotlib.pyplot as plt
 
 
 from ._base import PreRTModelBase
@@ -39,9 +40,12 @@ if TYPE_CHECKING:
 
 class Model1(PreRTModelBase):
     """
-        Variable deep abundance, fixed knee pressure and variable fractional scale height. 
+    Condensing gas, but no associated cloud. Model requires
+    the deep gas abundance and the desired relative humidity above the
+    condensation level only or at all levels.
     """
-    id : int = 1
+
+    id: int = 1
 
     def __init__(
             self, 
@@ -50,14 +54,14 @@ class Model1(PreRTModelBase):
             
             n_state_vector_entries : int,
             #   Number of parameters for this model stored in the state vector
-
-            pknee : float,
-            #   Knee pressure (atm)
+            
+            atm_profile_type : AtmosphericProfileTypeEnum,
+            #   ENUM that tells us what kind of atmospheric profile this model instance represents
         ):
         """
             Initialise an instance of the model.
         """
-        super().__init__(state_vector_start, n_state_vector_entries)
+        super().__init__(state_vector_start, n_state_vector_entries, atm_profile_type)
         
         # Define sub-slices of the state vector that correspond to
         # parameters of the model.
@@ -66,51 +70,61 @@ class Model1(PreRTModelBase):
         # names and ordering when they are passed to the `self.calculate(...)` 
         # class method.
         self.parameters = (
-            ModelParameter('ABU_DEEP', slice(0,1), 'Deep abundance'),
-            ModelParameter('FSH', slice(1,2), 'Fractional scale height'),
+            ModelParameter("deep_vmr", slice(0, 1), "Deep gas abundance", "RATIO"),
+            ModelParameter("frac_scale_height", slice(1, 2), "Fractional scale height above 1st cloud", "km"),
         )
 
-        self.pknee = pknee
-        
         return
 
     @classmethod
     def calculate(
-            cls, 
-            atm : "Atmosphere_0",
+            cls,
+            atm: "Atmosphere_0",
             #   Instance of Atmosphere_0 class we are operating upon
-            
-            atm_profile_type : AtmosphericProfileTypeEnum,
+
+            atm_profile_type: AtmosphericProfileTypeEnum,
             #   ENUM of atmospheric profile type we are altering.
-            
-            atm_profile_idx : int | None,
+
+            atm_profile_idx: int | None,
             #   Index of the atmospheric profile we are altering (or None if the profile type does not have multiples)
 
-            PKNEE : float,
+            deep_vmr: float,
+            #   Deep gas abundance
+            
+            fsh: float,
+            #   Fractional scale height (km)
+            
+            pknee: float,
             #   Knee pressure (atm)
-
-            ABU_DEEP : float, 
-            #   Deep abundance 
             
-            FSH : float,
-            #   Fractional scale height
-            
-            MakePlot=False
+            MakePlot: bool = False,
         ) -> tuple["Atmosphere_0", np.ndarray]:
-
         """
             FUNCTION NAME : model1()
 
             DESCRIPTION :
-
-                Variable deep abundance, fixed knee pressure and variable fractional scale height.    
+                Function defining the model parameterisation 11 in NEMESIS.
+                Condensing gas profile (no cloud). Profile is deep constant until
+                limited by saturation vapour pressure (SVP) * RH.
 
             INPUTS :
 
                 atm :: Python class defining the atmosphere
-                ABU_DEEP :: Deep abundance
-                FSH :: Fractional scale height
-                PKNEE :: Knee pressure (atm)
+
+                atm_profile_type :: AtmosphericProfileTypeEnum
+                    ENUM of atmospheric profile type we are altering.
+
+                atm_profile_idx :: int | None
+                    Index of the atmospheric profile we are altering (or None if the profile type does not have multiples)
+
+                deep_vmr :: float
+                    Deep gas abundance
+
+                fsh :: float
+                    Fractional scale height (km)
+
+                pknee :: float
+                    Knee pressure (atm)
 
             OPTIONAL INPUTS:
 
@@ -118,215 +132,229 @@ class Model1(PreRTModelBase):
 
             OUTPUTS :
 
-                atm :: Updated atmospheric class
-                xmap(mparam,npro) :: Matrix of relating funtional derivatives to 
-                                                 elements in state vector
+                atm :: Updated atmosphere class
+                xmap(2,npro) :: Matrix of relating funtional derivatives to
+                                elements in state vector
 
-            CALLING SEQUENCE:
+            MODIFICATION HISTORY : Michelle Colantoni (29/05/2026)
+        """
 
-                atm,xmap = model62(atm,p1,p2,p3,t0,alpha1,alpha2)
+        # Renaming variables to match FORTRAN code
+        xdeep = deep_vmr
+        xfsh = fsh
 
-            MODIFICATION HISTORY : Juan Alday (18/12/2025)
+        # Initialising arrays
+        p_atm = np.array(atm.P) / 101325.0  # Convert from Pa to atm
+        h = np.array(atm.H) * 1e-3  # Convert from m to km
+        x1 = np.zeros(atm.NP)
+        xmap = np.zeros((2, atm.NP))
 
-        """        
-        
-        xfac = (1.0 - FSH) / FSH
-
-        #d(xfac)/d(FSH)
-        dxfac = -1.0 / FSH**2.
-
-        #Finding the knee altitude 
-        pknee_pa = PKNEE * 101325.   #Calculating knee pressure in Pa
-        isort = np.argsort(atm.P)
-        p_sorted = atm.P[isort]
-        h_sorted = atm.H[isort]
-        hknee = np.interp(pknee_pa, p_sorted, h_sorted) #metres
-
-        #Calculating the scale height
+        # Calculate atmospheric properties
         R = const.R
-        scale = R * atm.T / (atm.MOLWT * atm.GRAV)   #scale height (m)
+        scale = R * atm.T / (atm.MOLWT * atm.GRAV) * 1e-3  # Convert to km
 
-        #Creating the new vertical profile and the functional derivatives
-        xprof = np.zeros(atm.NP)
-        xmap = np.zeros((2,atm.NP))   #Matrix with functional derivates of the parameters wrt the profiles
-        jfsh = 0
-        for j in range(atm.NP):
+        # To calculate the crossover point
+        def verint(x, y, xin):
+            n = len(x)
 
-            #Above knee pressure
-            if atm.P[j]>=pknee_pa:
-
-                xprof[j] = ABU_DEEP
-                xmap[0,j] = 1.0
-
+            if x[0] < x[-1]:
+                for i in range(n):
+                    if x[i] > xin:
+                        break
             else:
+                for i in range(n):
+                    if x[i] < xin:
+                        break
 
+            if i == 0:
+                i = 1
+            if x[i - 1] == x[i]:
+                yout = y[i]
+            else:
+                yout = y[i - 1] + (y[i] - y[i - 1]) * (xin - x[i - 1]) / (x[i] - x[i - 1])
+
+            if np.isnan(yout):
+                yout = y[i]
+
+            return yout
+
+        xfac = (1.0 - xfsh) / xfsh
+        dxfac = -1.0 / xfsh
+
+        hknee = verint(p_atm, h, pknee)
+        jfsh = 0
+
+        for j in range(atm.NP):
+            x1[j] = xdeep
+            # VARIDENT(IVAR,1).EQ.0 in Fortran
+            if atm_profile_type == AtmosphericProfileTypeEnum.TEMPERATURE:
+                xmap[0, j] = 1.0
+            else:
+                xmap[0, j] = x1[j]
+
+            if p_atm[j] < pknee:
                 if jfsh == 0:
-                    delh = atm.H[j] - hknee
+                    delh = h[j] - hknee
                 else:
-                    delh = atm.H[j] - atm.H[j - 1]
+                    delh = h[j] - h[j - 1]
 
-                xprof[j]=xprof[j-1]*np.exp(-delh*xfac/scale[j])
-
-                #Functional derivative of ABU_DEEP
-                xmap[0,j] = xmap[0,j-1] * np.exp(-delh * xfac / scale[j])
-
-                #Functional derivative of FSH
-                xmap[1,j] = (
-                    (-delh / scale[j])
-                    * dxfac
-                    * xprof[j-1]
-                    * np.exp(-delh * xfac / scale[j])
-                    + xmap[1,j-1]
-                    * np.exp(-delh * xfac / scale[j])
-                )
+                x1[j] = x1[j - 1] * np.exp(-delh * xfac / scale[j])
+                xmap[0, j] = xmap[0, j - 1] * np.exp(-delh * xfac / scale[j])
+                xmap[1, j] = (-delh / scale[j]) * dxfac * x1[j - 1] * np.exp(
+                    -delh * xfac / scale[j]
+                ) + xmap[1, j - 1] * np.exp(-delh * xfac / scale[j])
 
                 jfsh = 1
 
-                if xprof[j] < 1.0e-36:
-                    xprof[j] = 1.0e-36
+                x1[j] = max(x1[j], 1e-36)
 
-        #Updating atmosphere class
         if atm_profile_type == AtmosphericProfileTypeEnum.GAS_VOLUME_MIXING_RATIO:
-            tmp = np.array(atm.VMR)
-            tmp[:,atm_profile_idx] = xprof
-            atm.edit_VMR(tmp)
-        elif atm_profile_type == AtmosphericProfileTypeEnum.TEMPERATURE:
-            atm.edit_T(xprof)        
-        elif atm_profile_type == AtmosphericProfileTypeEnum.AEROSOL_DENSITY:
-            tmp = np.array(atm.DUST)
-            tmp[:,atm_profile_idx] = xprof
-            atm.edit_DUST(tmp)
-        elif atm_profile_type == AtmosphericProfileTypeEnum.PARA_H2_FRACTION:
-            atm.PARAH2(xprof)
-        elif atm_profile_type == AtmosphericProfileTypeEnum.FRACTIONAL_CLOUD_COVERAGE:
-            atm.FRAC(xprof)
+            # Update atmosphere VMR -- no conversion necessary as unitless
+            atm.VMR[:, atm_profile_idx] = x1[:]
         else:
-            raise ValueError(f'{cls.__name__} id {cls.id} has unknown atmospheric profile type {atm_profile_type}')
-        
+            _msg = f"Model id={cls.id} is only defined for gas VMR profiles."
+            _lgr.error(_msg)
+            raise ValueError(_msg)
+
+        if MakePlot == True:
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(7, 4))
+            ax1.semilogy(atm.VMR[:, atm_profile_idx], p_atm)
+            ax1.set_ylim(p_atm.max(), p_atm.min())
+            ax1.set_xlabel("VMR")
+            ax1.set_ylabel("Pressure (atm)")
+            ax1.grid()
+
+            ax2.plot(atm.T, p_atm)
+            ax2.set_ylim(p_atm.max(), p_atm.min())
+            ax2.set_xlabel("Temperature (K)")
+            ax2.set_ylabel("Pressure (atm)")
+            ax2.grid()
+
+            plt.tight_layout()
+            plt.show()
+
         return atm, xmap
 
     @classmethod
     def from_apr_to_state_vector(
             cls,
-            variables : "Variables_0",
-            f : IO,
-            varident : np.ndarray[[3],int],
-            varparam : np.ndarray[["mparam"],float],
-            ix : int,
-            lx : np.ndarray[["mx"],int],
-            x0 : np.ndarray[["mx"],float],
-            sx : np.ndarray[["mx","mx"],float],
-            inum : np.ndarray[["mx"],int],
-            npro : int,
-            ngas : int,
-            ndust : int,
-            nlocations : int,
-            runname : str,
-            sxminfac : float,
+            variables: "Variables_0",
+            f: IO,
+            varident: np.ndarray[[3], int],
+            varparam: np.ndarray[["mparam"], float],
+            ix: int,
+            lx: np.ndarray[["mx"], int],
+            x0: np.ndarray[["mx"], float],
+            sx: np.ndarray[["mx", "mx"], float],
+            inum: np.ndarray[["mx"], int],
+            npro: int,
+            ngas: int,
+            ndust: int,
+            nlocations: int,
+            runname: str,
+            sxminfac: float,
         ) -> Self:
         ix_0 = ix
-        #******** profile held as deep amount, fsh and knee pressure
+        # *** model 1 - Variable profile *******
+        tmp = np.fromstring(f.readline().rsplit("!", 1)[0], sep=" ", count=1, dtype="float")  # Use "!" as comment character in *.apr files
+        pknee = tmp[0]
+        tmp = np.fromstring(f.readline().rsplit("!", 1)[0], sep=" ", count=2, dtype="float")
+        xdeep = tmp[0]
+        edeep = tmp[1]
+        tmp = np.fromstring(f.readline().rsplit("!", 1)[0], sep=" ", count=2, dtype="float")
+        xfsh = tmp[0]
+        efsh = tmp[1]
 
-        #Reading pknee
-        s = f.readline().split()
-        pknee = float(s[0])
         varparam[0] = pknee
 
-        #Reading deep abundance
-        s = f.readline().split()
-        xdeep = float(s[0])
-        edeep = float(s[1])
-
-        if varident[0]==0: #Temperature
-            x0[ix]=xdeep
-            err=edeep
-        else: #VMR, para-H2 or cloud
-            if xdeep>0.0:
-                x0[ix]=np.log(xdeep)
-                lx[ix]=1
-                inum[ix]=0  #We take the derivatives analytically
-            else:
-                raise ValueError("error in read_apr (Model 1) :: xdeep must be >0 if it applies to any parameter but temperature")
-            err=edeep/xdeep
-        sx[ix,ix]=err**2.
-        ix += 1
-        
-        #Reading fractional scale height
-        s = f.readline().split()
-        fsh = float(s[0])
-        efsh = float(s[1])
-        if fsh>0.0:
-            x0[ix] = np.log(fsh)
-            lx[ix] = 1
-            inum[ix] = 1 #We take the derivatives analytically
-            sx[ix,ix] = (efsh/fsh)**2.
+        # deep abundance / temperature(?)
+        if varident[0] == 0:
+            x0[ix] = xdeep
+            lx[ix] = 0
         else:
-            raise ValueError('error in read_apr (Model 1) :: fsh must be > 0')
+            if xdeep < 0.0:
+                raise ValueError(f"Model1 xdeep must be > 0 for log retrieval, got {xdeep}")
+            x0[ix] = np.log(xdeep)
+            lx[ix] = 1
+
+        err = edeep / xdeep
+        sx[ix, ix] = err**2.0
+
         ix += 1
-        
+        # fractional scale height
+        if xfsh > 0.0:
+            x0[ix] = np.log(xfsh)
+            lx[ix] = 1
+        else:
+            raise ValueError(f"Model1 xfsh must be > 0 for log retrieval, got {xfsh}")
+
+        err = efsh / xfsh
+        sx[ix, ix] = err**2.0
+
+        ix += 1
+
         model_classification = variables.classify_model_type_from_varident(varident, ngas, ndust)
         assert issubclass(cls, model_classification[0]), "Model base class must agree with the classification from Variables_0::classify_model_type_from_varident"
 
-        return cls(ix_0, ix-ix_0, pknee)
+        return cls(ix_0, ix-ix_0, model_classification[1])
 
     @classmethod
     def from_bookmark(
             cls,
-            variables : "Variables_0",
-            varident : np.ndarray[[3],int],
-            varparam : np.ndarray[["mparam"],float],
-            ix : int,
-            npro : int,
-            ngas : int,
-            ndust : int,
-            nlocations : int,
+            variables: "Variables_0",
+            varident: np.ndarray[[3], int],
+            varparam: np.ndarray[["mparam"], float],
+            ix: int,
+            npro: int,
+            ngas: int,
+            ndust: int,
+            nlocations: int,
         ) -> Self:
         ix_0 = ix
-        #******** profile held as deep amount, fsh and knee pressure  
-        ix = ix + 2
+        # ******** profile defined by deep abundance and knee pressure ********
+        # ******** and the fractional scale height ********
+        if varident[2] != cls.id:
+            raise ValueError("error in Model1.from_bookmark() :: wrong model id")
 
-        pknee = varparam[0]
+        ix = ix + 3
 
-        return cls(ix_0, ix-ix_0, pknee)
+        model_classification = variables.classify_model_type_from_varident(varident, ngas, ndust)
+        assert issubclass(cls, model_classification[0]), "Model base class must agree with the classification from Variables_0::classify_model_type_from_varident"
+
+        return cls(ix_0, ix-ix_0, model_classification[1])
 
     def calculate_from_subprofretg(
             self,
-            forward_model : "ForwardModel_0",
-            ix : int,
-            ipar : int,
-            ivar : int,
-            xmap : np.ndarray,
+            forward_model: "ForwardModel_0",
+            ix: int,
+            ipar: int,
+            ivar: int,
+            xmap: np.ndarray,
         ) -> None:
-        #Model 1. profile held as deep amount, fsh and knee pressure  
-        #***************************************************************
+        # Model 1. Variable profile defined by deep abundance and knee pressure and the fractional scale height
+        # ***************************************************************
 
         atm = forward_model.AtmosphereX
-
-        #Finding the atmospheric profile type and the index of the profile we want to modify
         atm_profile_type, atm_profile_idx = atm.ipar_to_atm_profile_type(ipar)
-        
-        #Getting the parameters from the state vector
-        xn_params = self.get_parameter_values_from_state_vector(forward_model.Variables.XN, forward_model.Variables.LX)
-        xn_params_1d = np.concatenate([np.atleast_1d(v) for v in xn_params])
 
-        xdeep = xn_params[0] ; fsh = xn_params[1]
-        
-        #Modifying Atmosphere based on model parameters
+        xdeep, xfsh = self.get_parameter_values_from_state_vector(
+            forward_model.Variables.XN, forward_model.Variables.LX
+        )
+
+        pknee = forward_model.Variables.VARPARAM[ivar, 0]
+
         atm, xmap1 = self.calculate(
             atm, 
-            atm_profile_type,
-            atm_profile_idx,
-            self.pknee, 
+            atm_profile_type, 
+            atm_profile_idx, 
             xdeep, 
-            fsh
+            xfsh, 
+            pknee, 
+            MakePlot=False,
         )
-        
-        #Calculating derivatives of the atmospheric profile with respect to the state vector
-        for i in range(self.n_state_vector_entries):
-            if forward_model.Variables.LX[self.state_vector_start+i] == 1: #If carried in log space, then the derivative is multiplied by the value of the parameter
-                xmap1[i,:] = xmap1[i,:] * xn_params_1d[i]
 
         forward_model.AtmosphereX = atm
-        xmap[self.state_vector_slice, ipar, 0:atm.NP] = xmap1
+        xmap[self.state_vector_slice, ipar, 0 : forward_model.AtmosphereX.NP] = xmap1
 
         return
+    
