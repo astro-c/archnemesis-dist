@@ -146,12 +146,25 @@ def retrieval_nemesis(
         Retrieval.edit_SA(Variables.SA)
         Retrieval.edit_XA(Variables.XA)
         
-        Retrieval.edit_KK(np.full((Retrieval.NY, Retrieval.NX), fill_value=np.nan))
-        Retrieval.DD = np.full((Retrieval.NX, Retrieval.NY), fill_value=np.nan)
-        Retrieval.AA = np.full((Retrieval.NX, Retrieval.NX), fill_value=np.nan)
-        Retrieval.SM = np.full((Retrieval.NX, Retrieval.NX), fill_value=np.nan)
-        Retrieval.SN = np.full((Retrieval.NX, Retrieval.NX), fill_value=np.nan)
-        Retrieval.ST = np.full((Retrieval.NX, Retrieval.NX), fill_value=np.nan)
+        if Retrieval.NITER == -1:
+            Retrieval.edit_KK(np.full((Retrieval.NY, Retrieval.NX), fill_value=0.))
+            Retrieval.DD = np.full((Retrieval.NX, Retrieval.NY), fill_value=0.)
+            Retrieval.AA = np.full((Retrieval.NX, Retrieval.NX), fill_value=0.)
+            Retrieval.SM = np.full((Retrieval.NX, Retrieval.NX), fill_value=0.)
+            Retrieval.SN = np.full((Retrieval.NX, Retrieval.NX), fill_value=0.)
+            Retrieval.ST = np.full((Retrieval.NX, Retrieval.NX), fill_value=0.)
+        elif Retrieval.NITER == 0:
+            # NITER=0 calculates jacobian but doesnt use it
+            YN,KK = forward_model_instance.jacobian_nemesis(NCores=NCores,nemesisSO=nemesisSO,nemesisdisc=nemesisdisc,nemesisPT=nemesisPT,nemesisC=nemesisC)
+            np.savetxt("/home/c/colantoni/YN.txt",YN)
+            Retrieval.edit_KK(KK)
+            Retrieval.DD = np.linalg.solve((KK @ Variables.SA @ KK.T + Measurement.SE).T, KK @ Variables.SA).T
+            Retrieval.AA = Retrieval.DD @ KK
+            Retrieval.SM = Retrieval.DD @ Measurement.SE @ Retrieval.DD.T
+            Retrieval.SN = (Retrieval.AA - np.eye(Retrieval.NX)) @ Variables.SA @ (Retrieval.AA - np.eye(Retrieval.NX)).T
+            Retrieval.ST = Retrieval.SM + Retrieval.SN 
+        else:
+            raise RuntimeError('Cannot have NITER < -1')
         
         if Measurement.SPECMOD is not None:
             if Retrieval.YN is None:
@@ -320,7 +333,7 @@ def retrieval_nemesis(
         if legacy_files is False:
             Retrieval.write_output_hdf5(runname,Variables)
         else:
-            Retrieval.write_cov(runname,Variables,pickle=False)
+            Retrieval.write_cov(runname,Variables,Atmosphere,pickle=False)
             Retrieval.write_mre(runname,Variables,Measurement)
             Retrieval.write_raw(runname,Variables,Atmosphere)
             
