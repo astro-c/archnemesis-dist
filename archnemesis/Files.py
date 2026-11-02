@@ -812,7 +812,7 @@ def read_cov(runname,MakePlot=False):
     nvar = int(tmp[1])
     
     varident = np.zeros([nvar,3],dtype='int')
-    varparam = np.zeros([nvar,5],dtype='int')
+    varparam = np.zeros([nvar,5],dtype='float')
     for i in range(nvar):
         tmp = np.fromfile(f,sep=' ',count=3,dtype='int')
         varident[i,:] = tmp[:]
@@ -855,13 +855,13 @@ def read_cov(runname,MakePlot=False):
             aa[i,j] = tmp[0]
     
     
-    for i in range(nx):
-        for j in range(ny):
+    for j in range(ny):
+        for i in range(nx):
             tmp = np.fromfile(f,sep=' ',count=1,dtype='float')
             dd[i,j] = tmp[0]
 
-    for i in range(ny):
-        for j in range(nx):
+    for j in range(nx):
+        for i in range(ny):
             tmp = np.fromfile(f,sep=' ',count=1,dtype='float')
             kk[i,j] = tmp[0]
     
