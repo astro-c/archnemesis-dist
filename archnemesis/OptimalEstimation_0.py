@@ -875,7 +875,7 @@ class OptimalEstimation_0:
 
         f.close()  
 
-    def write_cov(self,runname,Variables,pickle=False):
+    def write_cov(self,runname,Variables,Atmosphere,pickle=False):
         """
         Write information about the Optimal Estimation matrices into the .cov file
 
@@ -893,7 +893,7 @@ class OptimalEstimation_0:
             #Open file
             f = open(fname,'w')
 
-            npro=1
+            npro=Atmosphere.NP
             f.write("%i %i\n" % (npro,Variables.NVAR))
 
             for ivar in range(Variables.NVAR):
@@ -916,12 +916,12 @@ class OptimalEstimation_0:
                 for j in range(self.NX):
                     f.write("%10.8e\n" % (self.AA[i,j]))
 
-            for i in range(self.NX):
-                for j in range(self.NY):
+            for j in range(self.NY):
+                for i in range(self.NX):
                     f.write("%10.8e\n" % (self.DD[i,j]))
 
-            for i in range(self.NY):
-                for j in range(self.NX):
+            for j in range(self.NX):
+                for i in range(self.NY):
                     f.write("%10.8e\n" % (self.KK[i,j]))
 
             for i in range(self.NY):
@@ -957,7 +957,7 @@ class OptimalEstimation_0:
             nvar = int(tmp[1])
 
             varident = np.zeros([nvar,3],dtype='int')
-            varparam = np.zeros([nvar,5],dtype='int')
+            varparam = np.zeros([nvar,5],dtype='float')
             for i in range(nvar):
                 tmp = np.fromfile(f,sep=' ',count=3,dtype='int')
                 varident[i,:] = tmp[:]
@@ -1004,14 +1004,14 @@ class OptimalEstimation_0:
                     aa[i,j] = tmp[0]
 
 
-            for i in range(nx):
-                for j in range(ny):
+            for j in range(ny):
+                for i in range(nx):
                     tmp = np.fromfile(f,sep=' ',count=1,dtype='float')
                     dd[i,j] = tmp[0]
 
 
-            for i in range(ny):
-                for j in range(nx):
+            for j in range(nx):
+                for i in range(ny):
                     tmp = np.fromfile(f,sep=' ',count=1,dtype='float')
                     kk[i,j] = tmp[0]
 
