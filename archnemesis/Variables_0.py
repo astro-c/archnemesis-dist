@@ -540,7 +540,15 @@ class Variables_0:
 
         #Generally, we use h = 0.05*x
         dstep = np.zeros(self.NX)
-        dstep[:] = self.XN * 0.05
+        dstep[:] = 0.1 * np.sqrt(np.diagonal(self.SA))
+
+        if self.JRAD != -1:
+            # Following Fortran logic
+            dstep[self.JRAD] = 10.
+            # Need to implement JTAN scenarios too!!
+        
+        # previously used:
+        # dstep[:] = self.XN * 0.05
 
         #Changing the step size for certain parameterisations
         ix = 0
